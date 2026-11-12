@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+    <path
+        android:name="warning_triangle"
+        android:pathData="M8,1.6 L14.4,13.4 L1.6,13.4 Z"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_bubble_error_text"
+        android:strokeWidth="1.4"
+        android:strokeLineJoin="round" />
+    <path
+        android:name="warning_mark"
+        android:pathData="M8,5.3 L8,9.1"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_bubble_error_text"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:name="warning_dot"
+        android:pathData="M7.25,11.3 A0.75,0.75 0 1,1 8.75,11.3 A0.75,0.75 0 1,1 7.25,11.3 Z"
+        android:fillColor="@color/bf_bubble_error_text" />
+</vector>

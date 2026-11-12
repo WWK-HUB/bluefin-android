@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chat may use plain HTTP only for a user-configured localhost or private-LAN
+  endpoint. The app-level EndpointAddressPolicy still rejects remote HTTP before
+  any request, so this platform allowance cannot reach a public plain-HTTP host.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

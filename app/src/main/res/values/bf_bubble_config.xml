@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 数值/时间合同；运行时不得把这些常量改写成代码内魔法数。 -->
+    <integer name="bf_bubble_max_body_lines">4</integer><!-- 固定预留正文行数上限 -->
+    <integer name="bf_bubble_min_body_lines">2</integer><!-- 空间不足时降到 2 行 -->
+    <integer name="bf_bubble_max_total_lines">5</integer><!-- 用户摘要 1 行 + 正文 4 行 -->
+    <integer name="bf_bubble_max_preview_graphemes">240</integer><!-- 可视预览缓冲上限 -->
+    <integer name="bf_bubble_hold_ms">8000</integer><!-- 完成停留 -->
+    <integer name="bf_bubble_chip_ms">30000</integer><!-- 折叠芯片停留 -->
+    <integer name="bf_bubble_error_hold_ms">8000</integer><!-- 错误停留后折叠 -->
+    <integer name="bf_bubble_enter_ms">120</integer><!-- alpha 淡入 -->
+    <integer name="bf_bubble_exit_ms">80</integer><!-- 普通收起 alpha 淡出 -->
+    <integer name="bf_bubble_crossfade_ms">120</integer><!-- 泡/芯片交叉淡化 -->
+    <integer name="bf_bubble_dot_duration_ms">450</integer><!-- 单程 0.35-&gt;1 -->
+    <integer name="bf_bubble_dot_cycle_ms">900</integer><!-- 单点完整周期 -->
+    <integer name="bf_bubble_dot_offset_1_ms">0</integer><!-- dot_1 startOffset -->
+    <integer name="bf_bubble_dot_offset_2_ms">300</integer><!-- dot_2 startOffset -->
+    <integer name="bf_bubble_dot_offset_3_ms">600</integer><!-- dot_3 startOffset -->
+    <integer name="bf_bubble_scale_min_percent">50</integer><!-- S 下限 -->
+    <integer name="bf_bubble_scale_default_percent">85</integer><!-- S 默认 -->
+    <integer name="bf_bubble_scale_max_percent">130</integer><!-- S 上限 -->
+    <integer name="bf_bubble_k_min_percent">85</integer><!-- 装饰 k 下限 -->
+    <integer name="bf_bubble_k_max_percent">120</integer><!-- 装饰 k 上限 -->
+    <integer name="bf_bubble_line_height_percent">130</integer><!-- 行高/字号 -->
+    <integer name="bf_bubble_width_base_dp">160</integer><!-- 宽 160+120t -->
+    <integer name="bf_bubble_width_span_dp">120</integer><!-- 宽 160+120t -->
+    <integer name="bf_bubble_max_height_dp">220</integer><!-- 总高硬上限 -->
+    <integer name="bf_bubble_safe_height_percent">28</integer><!-- 总高 &lt;= 28% 安全高 -->
+    <integer name="bf_bubble_safe_width_percent">72</integer><!-- 宽 &lt;= 72% 安全宽 -->
+    <integer name="bf_bubble_screen_margin_dp">12</integer><!-- 离屏幕安全边 -->
+    <integer name="bf_bubble_character_gap_dp">6</integer><!-- 尾尖/主体离角色 -->
+    <integer name="bf_bubble_orb_gap_dp">8</integer><!-- 离 orb 窗 -->
+    <integer name="bf_bubble_touch_min_dp">44</integer><!-- 点击目标下限 -->
+    <integer name="bf_bubble_fail_threshold">3</integer><!-- 连续显示失败熔断 -->
+    <integer name="bf_bubble_fail_reset_ms">2000</integer><!-- 正常 2s 重置失败计数 -->
+    <integer name="bf_bubble_position_throttle_ms">50</integer><!-- 位置更新 &lt;=20Hz -->
+    <integer name="bf_bubble_source_publish_ms">80</integer><!-- 宿主既有 publish 约 80ms -->
+    <integer name="bf_bubble_target_follow_latency_ms">150</integer><!-- 正常跟随延迟目标 -->
+    <integer name="bf_bubble_stream_graphemes_per_sec">30</integer><!-- 约 30 字素/秒 -->
+    <integer name="bf_bubble_stream_backlog_max">60</integer><!-- 积压超过则批进 -->
+    <integer name="bf_bubble_chip_max_height_dp">64</integer><!-- 大字体芯片增高上限 -->
+</resources>

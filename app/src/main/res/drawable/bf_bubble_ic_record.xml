@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+    <path
+        android:name="record_lines"
+        android:pathData="M3,4 L13,4 M3,8 L13,8 M3,12 L10,12"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_bubble_character_text"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round" />
+</vector>

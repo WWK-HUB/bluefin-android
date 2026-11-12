@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 中文默认文案；不得把原始 API 响应/Key/URL 参数放进这里。 -->
+    <string name="bf_bubble_user_label">我</string>
+    <string name="bf_bubble_character_name_default">蓝鳍</string>
+    <string name="bf_bubble_chip_format">%1$s：%2$s</string>
+    <string name="bf_bubble_thinking">思考中</string>
+    <string name="bf_bubble_stopped">已停止</string>
+    <string name="bf_bubble_stopped_suffix">（已停止）</string>
+    <string name="bf_bubble_stop">停止</string>
+    <string name="bf_bubble_record">记录</string>
+    <string name="bf_bubble_view_all">查看全部</string>
+    <string name="bf_bubble_close">关闭气泡</string>
+    <string name="bf_bubble_close_cd">关闭气泡</string>
+    <string name="bf_bubble_error">错误</string>
+    <string name="bf_bubble_error_cd">错误</string>
+    <string name="bf_bubble_thinking_cd">思考中</string>
+    <string name="bf_bubble_stop_cd">停止</string>
+    <string name="bf_bubble_record_cd">记录</string>
+    <string name="bf_bubble_view_all_cd">查看全部</string>
+    <string name="bf_bubble_busy">正在回复，可先停止。</string>
+    <string name="bf_bubble_unconfigured">还没接通模型，要去设置里填写吗？</string>
+    <string name="bf_bubble_settings">去设置</string>
+    <string name="bf_bubble_cancel">取消</string>
+    <string name="bf_bubble_no_content">模型没有返回内容，请稍后再试。</string>
+    <string name="bf_bubble_auth_error">API Key 可能不对，请检查 API Key。</string>
+    <string name="bf_bubble_not_found">找不到模型或地址，请检查模型名和 API 地址。</string>
+    <string name="bf_bubble_rate_limited">服务忙或限流，请稍后再试。</string>
+    <string name="bf_bubble_partial_error">回复中断，已保留收到的内容。具体脱敏原因在记录内查看。</string>
+    <string name="bf_bubble_error_chip">回复失败 · 记录</string>
+    <string name="bf_bubble_local_failure">气泡暂不可用，回复仍在「记录」中。</string>
+    <string name="bf_bubble_circuit_open">气泡已暂停，本次使用请在「记录」中继续聊。</string>
+    <string name="bf_bubble_click_through_note">点击穿透已开，气泡暂不显示；回复请看记录。</string>
+    <string name="bf_bubble_switch_note">在角色旁预览本轮对话。点击穿透开启时不显示。</string>
+    <string name="bf_bubble_full_view">在应用内查看完整对话</string>
+</resources>

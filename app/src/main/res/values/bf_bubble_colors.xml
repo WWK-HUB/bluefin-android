@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 蓝鳍 0.7 气泡 token；浅/深仅换值，不复制结构。 -->
+    <color name="bf_bubble_user_fill">#FFF1D6</color>
+    <color name="bf_bubble_user_text">#4B3217</color>
+    <color name="bf_bubble_user_line">#AD6A1D</color>
+    <color name="bf_bubble_character_fill">#E8F4FF</color>
+    <color name="bf_bubble_character_text">#173B54</color>
+    <color name="bf_bubble_character_line">#3A7799</color>
+    <color name="bf_bubble_chip_fill">#E8F4FF</color>
+    <color name="bf_bubble_chip_text">#173B54</color>
+    <color name="bf_bubble_chip_line">#3A7799</color>
+    <color name="bf_bubble_error_text">#9D2828</color>
+    <color name="bf_bubble_think_dot">#3A7799</color>
+</resources>

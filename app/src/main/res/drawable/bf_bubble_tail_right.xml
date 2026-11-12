@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="6dp"
+    android:height="12dp"
+    android:viewportWidth="6"
+    android:viewportHeight="12">
+    <!-- 闭合尖端：两翼在基边内缩 0.5dp 的同一尖点相接；基边只填充不描边。 -->
+    <!-- 1dp 同色遮缝区覆盖主体 1dp 描边；两翼线从遮缝内缘起笔。 -->
+    <path
+        android:name="tail_body"
+        android:pathData="M0,0.5 L0,11.5 L1,11.5 C2.8,10.7 5.5,8.3 5.5,6 C5.5,3.7 2.8,1.3 1,0.5 Z"
+        android:fillColor="@color/bf_bubble_character_fill" />
+    <path
+        android:name="tail_seam"
+        android:pathData="M0,0.5 L1,0.5 L1,11.5 L0,11.5 Z"
+        android:fillColor="@color/bf_bubble_character_fill" />
+    <path
+        android:name="tail_outline_left"
+        android:pathData="M1,0.5 C2.8,1.3 5.5,3.7 5.5,6"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_bubble_character_line"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:name="tail_outline_right"
+        android:pathData="M1,11.5 C2.8,10.7 5.5,8.3 5.5,6"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_bubble_character_line"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

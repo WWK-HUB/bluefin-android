@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/bf_bubble_dots_static">
+    <target
+        android:name="dot_1"
+        android:animation="@animator/bf_bubble_dot_1" />
+    <target
+        android:name="dot_2"
+        android:animation="@animator/bf_bubble_dot_2" />
+    <target
+        android:name="dot_3"
+        android:animation="@animator/bf_bubble_dot_3" />
+</animated-vector>
