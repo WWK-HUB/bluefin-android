@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 状态与控件文案；错误为安全短句，不含原始响应 / URL / 密钥。 -->
+    <string name="bf_speech_hint">说点什么…</string>
+    <string name="bf_speech_send">发送</string>
+    <string name="bf_speech_thinking">思考中</string>
+    <string name="bf_speech_stopped">已停止</string>
+    <string name="bf_speech_error">回复中断</string>
+    <string name="bf_speech_expand_cd">打开记录</string>
+    <string name="bf_speech_close_cd">关闭气泡</string>
+    <string name="bf_speech_stop_cd">停止回复</string>
+    <string name="bf_speech_send_disabled_cd">发送（请先输入）</string>
+</resources>

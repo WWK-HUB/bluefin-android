@@ -14,30 +14,38 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.provider.Settings
+import android.text.Editable
+import android.text.InputType
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.AnimationUtils
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.wwkhub.bluefin.PackBubbleColors
 import com.wwkhub.bluefin.R
 import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewPackPaletteInput
 import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewPalette
 import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewTailDirection
-import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewTailGeometry
-import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewTailRect
-import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewTailRequest
+import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewPaletteSource
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val EXIT_ANIMATION_MILLIS = 80L
+private const val INPUT_MIN_TOUCH_DP = 44
+private const val IME_FAILURE_CHECK_MILLIS = 900L
 
 /**
  * One bounded removal attempt sequence shared by the live window and the JVM
@@ -85,25 +93,21 @@ internal object BubblePreviewRemovalPolicy {
 }
 
 /**
- * The one compact, read-only native preview window.
+ * The one compact, content-sized 0.8 speech window.
  *
- * Formal 0.7 shape/tail/icon/dot resources are used for the default day/night
- * palette. A cached pack palette may override only the character zone; those
- * dynamic colors use a lightweight Canvas path so fill and stroke stay separate
- * (tinting a whole vector would merge them).
- *
- * The window is always content-sized (never MATCH_PARENT), NOT_FOCUSABLE,
- * NOT_TOUCH_MODAL, translucent and touchable only inside its own rectangle.
- * There is no full-screen layer, dim, outside-touch watcher, EditText or
- * additional service.
- *
- * Text-only updates never touch WindowManager dimensions. A state/plan change
- * performs exactly one in-window rebuild and one `updateViewLayout`.
+ * It renders two faces internally and never creates a second system window:
+ * a tailed input balloon with EditText + expand + send, or a tailed character
+ * reply with an untailed user chip above it. The window starts
+ * NOT_FOCUSABLE | NOT_TOUCH_MODAL | LAYOUT_IN_SCREEN; only while the input face
+ * is attached and the user is typing does it temporarily become focusable for
+ * the IME. It is never full screen, never dims or watches outside touches, and
+ * it removes immediately for click-through/invalidation.
  */
 internal class BubblePreviewWindow(
     context: Context,
     private val windowManager: WindowManager,
-    initialContent: BubbleTurnSnapshot,
+    initialContent: BubbleTurnSnapshot?,
+    initialInput: SpeechInputSnapshot?,
     initialFailureText: String,
     initialPlan: BubblePreviewLayoutPlan,
     placement: BubblePreviewPlacement,
@@ -114,6 +118,10 @@ internal class BubblePreviewWindow(
     private val onClose: () -> Unit,
     private val onStop: () -> Unit,
     private val onExpand: () -> Unit,
+    private val onInputSend: (String) -> Unit = {},
+    private val onInputExpand: (String) -> Unit = {},
+    private val onInputDraftChanged: (String) -> Unit = {},
+    private val onInputNoSpace: () -> Unit = {},
 ) {
     private val night = (context.resources.configuration.uiMode and
         Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -124,39 +132,71 @@ internal class BubblePreviewWindow(
             BubblePreviewPackPaletteInput(colors.lightFill, colors.lightText, colors.lightLine)
         }
     }
-    private val palette = BubblePreviewPalette.resolve(night, packInput)
+    private val packPalette = BubblePreviewPalette.resolve(night, packInput)
     private val density = context.resources.displayMetrics.density.coerceAtLeast(0.5f)
     private val scaledDensity = context.resources.displayMetrics.scaledDensity
         .takeIf { it.isFinite() && it > 0f } ?: density
     private val root = FrameLayout(context)
-    private var content: BubbleTurnSnapshot = initialContent
+    private var content: BubbleTurnSnapshot? = initialContent
+    private var input: SpeechInputSnapshot? = initialInput
     private var failureText: String = initialFailureText
     private var plan: BubblePreviewLayoutPlan = initialPlan
+    private var mode: SpeechBubbleMode =
+        if (initialInput != null) SpeechBubbleMode.INPUT else SpeechBubbleMode.REPLY
     private var side: BubblePreviewSide = placement.side
     private var anchor: BubblePreviewPoint? = initialAnchor
+
     private var bodyView: TextView? = null
     private var chipView: TextView? = null
+    private var inputView: EditText? = null
+    private var sendView: TextView? = null
     private var thinkingDots: ImageView? = null
     private var contentView: View? = null
+    private var bodyContainer: View? = null
     private var tailView: View? = null
     private var closingForUser = false
     private var exitRunnable: Runnable? = null
+    private var added = false
+    private var applyingInputText = false
+    private var imeFailureNotified = false
+    private var imeSeen = false
+    private var imeCheckRunnable: Runnable? = null
+
+    private val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+        // Placement rects are screen pixels; layout against the full display
+        // origin rather than a content area shifted by system bars.
+        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
     private val params = WindowManager.LayoutParams(
         plan.windowWidthPx,
         plan.windowHeightPx,
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            // Same-display TOP|LEFT origin: placement rects are screen pixels,
-            // so the compact window must be laid out against the full display
-            // origin rather than a content area shifted by system bars.
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        baseFlags,
         PixelFormat.TRANSLUCENT,
     )
     private val displayLeft = geometry.displayBounds.left
     private val displayTop = geometry.displayBounds.top
+    private val displayHeight = geometry.displayBounds.height
     private var appliedX = placement.rect.left - displayLeft
     private var appliedY = placement.rect.top - displayTop
+
+    // Default speech tokens. A pack may override only the character reply and
+    // its tail; the input balloon, chip, send/expand/stop/close stay default.
+    private val inputFill = color(R.color.bf_speech_input_fill)
+    private val inputText = color(R.color.bf_speech_input_text)
+    private val inputHint = color(R.color.bf_speech_input_hint)
+    private val inputStroke = color(R.color.bf_speech_input_stroke)
+    private val userFill = color(R.color.bf_speech_user_fill)
+    private val userText = color(R.color.bf_speech_user_text)
+    private val userStroke = color(R.color.bf_speech_user_stroke)
+    private val iconColor = color(R.color.bf_speech_icon)
+    private val replyDefaultFill = color(R.color.bf_speech_reply_fill)
+    private val replyDefaultText = color(R.color.bf_speech_reply_text)
+    private val replyDefaultStroke = color(R.color.bf_speech_reply_stroke)
+    private val usePackReply = packPalette.characterSource == BubblePreviewPaletteSource.PACK
+    private val replyFill = if (usePackReply) packPalette.character.fill.argb else replyDefaultFill
+    private val replyText = if (usePackReply) packPalette.character.text.argb else replyDefaultText
+    private val replyStroke = if (usePackReply) packPalette.character.line.argb else replyDefaultStroke
 
     init {
         root.setBackgroundColor(Color.TRANSPARENT)
@@ -173,25 +213,30 @@ internal class BubblePreviewWindow(
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
         }
+        installImeListener()
         rebuild(animate = false)
     }
 
     fun add() {
         windowManager.addView(root, params)
+        added = true
         root.post {
-            if (!destroyedForCleanup && animationsEnabled()) {
+            if (destroyedForCleanup || closingForUser) return@post
+            if (mode == SpeechBubbleMode.INPUT) {
+                focusInputForTyping()
+            } else if (animationsEnabled()) {
                 try {
                     contentView?.startAnimation(
-                        AnimationUtils.loadAnimation(root.context, R.anim.bf_bubble_enter),
+                        AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_enter),
                     )
                 } catch (error: Exception) {
-                    // A broken animator resource must not leave the add path
-                    // uncontained; the window is already visible and usable.
                     contentView?.clearAnimation()
                 }
             }
         }
     }
+
+    fun isInputMode(): Boolean = mode == SpeechBubbleMode.INPUT
 
     fun updatePlacement(
         placement: BubblePreviewPlacement,
@@ -210,19 +255,11 @@ internal class BubblePreviewWindow(
         appliedY = nextY
         side = placement.side
         anchor = nextAnchor
-        // Any side change (including ABOVE->BELOW or LEFT->RIGHT on the same
-        // axis) changes which tail resource is needed. A fresh pet anchor can
-        // move the tail along the body even when the side is unchanged. Both
-        // only rearrange children inside the already-sized window; they never
-        // call WindowManager a second time for the same frame.
         if (sideChanged || anchorChanged) layoutVisual(animate = false)
-        windowManager.updateViewLayout(root, params)
+        updateWindow()
     }
 
-    /**
-     * One state/plan change: exactly one in-window rebuild and one window
-     * geometry update. Text-only deltas must use [updateText] instead.
-     */
+    /** Reply face update: one rebuild only when the plan/face changes. */
     fun applyState(
         snapshot: BubbleTurnSnapshot,
         failure: String,
@@ -231,7 +268,14 @@ internal class BubblePreviewWindow(
         nextAnchor: BubblePreviewPoint?,
     ) {
         if (destroyedForCleanup || closingForUser) return
-        val wasChip = isChip()
+        val faceChanged = mode != SpeechBubbleMode.REPLY ||
+            plan.windowWidthPx != nextPlan.windowWidthPx ||
+            plan.windowHeightPx != nextPlan.windowHeightPx ||
+            plan.showReplyBody != nextPlan.showReplyBody ||
+            plan.showActions != nextPlan.showActions ||
+            plan.bodyLines != nextPlan.bodyLines
+        if (mode != SpeechBubbleMode.REPLY) releaseInputFocus()
+        mode = SpeechBubbleMode.REPLY
         content = snapshot
         failureText = failure
         plan = nextPlan
@@ -243,35 +287,114 @@ internal class BubblePreviewWindow(
         params.height = nextPlan.windowHeightPx
         params.x = appliedX
         params.y = appliedY
-        val nowChip = isChip()
-        rebuild(animate = wasChip != nowChip)
-        windowManager.updateViewLayout(root, params)
+        if (faceChanged) {
+            rebuild(animate = true)
+        } else {
+            updateTextViews()
+        }
+        updateWindow()
     }
 
-    /** Text-only update: no rebuild, no WindowManager call, no re-measure of bounds. */
+    /** Input face update. Text-only edits never rebuild or touch WindowManager. */
+    fun applyInputState(
+        state: SpeechInputSnapshot,
+        nextPlan: BubblePreviewLayoutPlan,
+        placement: BubblePreviewPlacement,
+        nextAnchor: BubblePreviewPoint?,
+    ) {
+        if (destroyedForCleanup || closingForUser) return
+        val sizeChanged = plan.windowWidthPx != nextPlan.windowWidthPx ||
+            plan.windowHeightPx != nextPlan.windowHeightPx ||
+            plan.bodyLines != nextPlan.bodyLines
+        input = state
+        plan = nextPlan
+        side = placement.side
+        anchor = nextAnchor
+        appliedX = placement.rect.left - displayLeft
+        appliedY = placement.rect.top - displayTop
+        params.width = nextPlan.windowWidthPx
+        params.height = nextPlan.windowHeightPx
+        params.x = appliedX
+        params.y = appliedY
+        if (mode != SpeechBubbleMode.INPUT || sizeChanged) {
+            mode = SpeechBubbleMode.INPUT
+            rebuild(animate = false)
+            if (added) focusInputForTyping()
+        } else {
+            updateInputViews()
+        }
+        updateWindow()
+    }
+
+    /** Text-only reply update: no rebuild, no WindowManager call. */
     fun updateText(snapshot: BubbleTurnSnapshot, failure: String) {
         if (destroyedForCleanup || closingForUser) return
         content = snapshot
         failureText = failure
-        val body = bodyView
-        if (body != null) {
-            body.text = bodyText()
-            applyBodyDecoration(body)
-        }
-        val chip = chipView
-        if (chip != null) {
-            chip.text = chipText()
-        }
-        updateThinkingDots()
-        root.contentDescription = rootDescription()
+        updateTextViews()
     }
 
     fun currentX(): Int = appliedX
 
     fun currentY(): Int = appliedY
 
+    /**
+     * Only the input face, only after it is attached and the user asked to
+     * type. Removes NOT_FOCUSABLE, uses ADJUST_RESIZE, requestFocus and
+     * SHOW_IMPLICIT. No alternate-IME flag and no forced show.
+     */
+    fun focusInputForTyping() {
+        if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return
+        val view = inputView ?: return
+        try {
+            params.flags = baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            if (added) windowManager.updateViewLayout(root, params)
+            view.requestFocus()
+            view.post {
+                if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return@post
+                val imm = root.context.getSystemService(InputMethodManager::class.java)
+                imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+                root.requestApplyInsets()
+                scheduleImeFailureCheck()
+            }
+        } catch (error: Exception) {
+            onInputNoSpace()
+        }
+    }
+
+    /**
+     * Keyboard first, then clear focus, then restore NOT_FOCUSABLE. Every mode
+     * switch, close, click-through, revoke and removal path calls this before
+     * the content changes or the window is removed.
+     */
+    fun releaseInputFocus() {
+        imeCheckRunnable?.let { root.removeCallbacks(it) }
+        imeCheckRunnable = null
+        imeSeen = false
+        try {
+            val view = inputView
+            view?.clearFocus()
+            val token = view?.windowToken
+            val imm = root.context.getSystemService(InputMethodManager::class.java)
+            if (token != null) imm?.hideSoftInputFromWindow(token, 0)
+        } catch (error: Exception) {
+            // Optional focus cleanup must not escape the removal path.
+        }
+        try {
+            params.flags = baseFlags
+            params.softInputMode = 0
+            if (added) windowManager.updateViewLayout(root, params)
+        } catch (error: Exception) {
+            // A detached window is already as unfocusable as it can be.
+        }
+    }
+
     /** Hides the root before the bounded removal attempt, so no touch/visual leak remains. */
     fun hideForCleanup() {
+        releaseInputFocus()
+        imeCheckRunnable?.let { root.removeCallbacks(it) }
+        imeCheckRunnable = null
         destroyedForCleanup = true
         closingForUser = false
         exitRunnable?.let { root.removeCallbacks(it) }
@@ -279,19 +402,19 @@ internal class BubblePreviewWindow(
         stopThinkingDots()
         contentView?.clearAnimation()
         contentView = null
+        bodyContainer = null
         root.visibility = View.GONE
         root.isClickable = false
         bodyView = null
         chipView = null
+        inputView = null
+        sendView = null
         tailView = null
     }
 
     fun removeImmediateOnce() {
         val outcome = BubblePreviewRemovalPolicy.remove(
             object : BubblePreviewRemovalPort {
-                // Parent evidence is deliberately checked first: a window added
-                // successfully (or partially during a throwing add) is managed
-                // before first traversal even when isAttachedToWindow is false.
                 override fun isManaged(): Boolean =
                     root.parent != null || root.isAttachedToWindow
 
@@ -301,9 +424,6 @@ internal class BubblePreviewWindow(
             },
         )
         if (!outcome.removed) {
-            // Rethrowing the original exception keeps the boundary's sanitized
-            // type-only fault accurate; a still-attached root without an error
-            // is itself a bounded cleanup failure.
             throw outcome.lastError ?: IllegalStateException("bubble root still attached")
         }
     }
@@ -316,214 +436,365 @@ internal class BubblePreviewWindow(
         stopThinkingDots()
         bodyView = null
         chipView = null
+        inputView = null
+        sendView = null
         thinkingDots = null
         tailView = null
         contentView = null
+        bodyContainer = null
         root.removeAllViews()
-        val built: View = if (isChip()) {
-            buildChip(root.context)
+        val built = if (mode == SpeechBubbleMode.INPUT) {
+            buildInputFace(root.context)
         } else {
-            buildColumn(root.context)
+            buildReplyFace(root.context)
         }
         contentView = built
-        root.addView(built, FrameLayout.LayoutParams(plan.windowWidthPx, plan.windowHeightPx))
-        layoutVisual(animate = animate)
+        root.addView(
+            built,
+            FrameLayout.LayoutParams(plan.windowWidthPx, plan.windowHeightPx),
+        )
         root.setOnClickListener {
-            if (isChip()) {
-                if (content.isFailureChip) onRecord() else onExpand()
-            } else {
-                onRecord()
+            if (mode == SpeechBubbleMode.REPLY) onRecord()
+        }
+        layoutVisual(animate = false)
+        if (animate && animationsEnabled()) {
+            try {
+                built.startAnimation(
+                    AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_enter),
+                )
+            } catch (error: Exception) {
+                built.clearAnimation()
             }
         }
         root.contentDescription = rootDescription()
     }
 
     private fun layoutVisual(animate: Boolean) {
-        root.removeView(tailView)
-        tailView = null
-        val built = contentView ?: return
-        if (isChip()) {
-            built.layoutParams = FrameLayout.LayoutParams(
-                plan.windowWidthPx,
-                plan.windowHeightPx,
-            )
-        } else {
-            applyColumnLayout(built as LinearLayout)
-        }
-        if (animate) {
-            if (animationsEnabled()) {
-                built.startAnimation(
-                    AnimationUtils.loadAnimation(root.context, R.anim.bf_bubble_crossfade),
-                )
+        bodyContainer?.let { bodyChild ->
+            val body = bodyRect()
+            bodyChild.layoutParams = FrameLayout.LayoutParams(
+                max(1, body.right - body.left),
+                max(1, body.bottom - body.top),
+            ).apply {
+                leftMargin = body.left
+                topMargin = body.top
             }
         }
-    }
-
-    /**
-     * Resolve the worst-case tail reserve into an actual body rectangle and a
-     * tail view. If the tail cannot fit (narrow/short body, UP with a user
-     * summary, or an off-window rectangle), the body expands into the reserve
-     * so there is no transparent margin.
-     */
-    private fun applyColumnLayout(column: LinearLayout) {
-        val userHeight = if (plan.includeUserSummary) {
-            ceil(2f * plan.padVerticalPx + plan.userLineHeightPx).toInt().coerceAtLeast(1)
-        } else {
-            0
-        }
-        val gap = if (plan.includeUserSummary) {
-            ceil(plan.zoneGapPx).toInt().coerceAtLeast(1)
-        } else {
-            0
-        }
-        val userOffset = userHeight + gap
-        val reserve = ceil(plan.tailBudgetPx.toDouble()).toInt().coerceAtLeast(0)
-        val direction = tailDirectionFor(side)
-        val windowWidth = plan.windowWidthPx
-        val windowHeight = plan.windowHeightPx
-
-        // Reserve the tail strip on the side it actually extends toward. An UP
-        // tail is never requested through a user summary, so that case keeps no
-        // top strip and the character body fills the window.
-        val topReserve = if (direction == BubblePreviewTailDirection.UP &&
-            !plan.includeUserSummary
-        ) {
-            reserve
-        } else {
-            0
-        }
-        val bottomReserve =
-            if (direction == BubblePreviewTailDirection.DOWN) reserve else 0
-        val leftReserve =
-            if (direction == BubblePreviewTailDirection.LEFT) reserve else 0
-        val rightReserve =
-            if (direction == BubblePreviewTailDirection.RIGHT) reserve else 0
-
-        // The tail attaches to the character zone, not to the user summary.
-        val candidateBody = BubblePreviewTailRect(
-            left = leftReserve.toFloat(),
-            top = (if (topReserve > 0) topReserve else userOffset).toFloat(),
-            right = (windowWidth - rightReserve).toFloat(),
-            bottom = (windowHeight - bottomReserve).toFloat(),
-        )
-        val resolved = resolveTail(direction, candidateBody)
-        val visibleTail = resolved?.rect
-
-        val columnLeft: Int
-        val columnTop: Int
-        val columnRight: Int
-        val columnBottom: Int
-        if (visibleTail != null) {
-            columnLeft = leftReserve
-            columnTop = topReserve
-            columnRight = windowWidth - rightReserve
-            columnBottom = windowHeight - bottomReserve
-            addTailView(visibleTail, candidateBody.left.toInt(), candidateBody.top.toInt())
-        } else {
-            // No room for the tail: expand the character body into the whole
-            // reserve instead of leaving an empty transparent margin.
-            columnLeft = 0
-            columnTop = 0
-            columnRight = windowWidth
-            columnBottom = windowHeight
-        }
-        val columnWidth = (columnRight - columnLeft).coerceAtLeast(1)
-        val columnHeight = (columnBottom - columnTop).coerceAtLeast(1)
-        val characterTop = if (visibleTail != null) {
-            candidateBody.top.toInt()
-        } else {
-            userOffset
-        }
-        val characterHeight = (columnBottom - characterTop).coerceAtLeast(1)
-        val naturalCharacter = (column.getChildAt(column.childCount - 1) as? View)
-        naturalCharacter?.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            characterHeight,
-        )
-        if (naturalCharacter is LinearLayout && naturalCharacter.childCount >= 4) {
-            // Rasterised child boxes can exceed a float plan height by a few
-            // pixels after ceil(). Reserve the name/actions/padding first and
-            // let the body slot absorb the rounding, so buttons are never
-            // clipped by the tail plan.
-            val fixed = ceil(plan.nameLineHeightPx).toInt() +
-                ceil(plan.actionGapPx).toInt() +
-                plan.actionRowPx +
-                ceil(2f * plan.padVerticalPx).toInt()
-            val bodyRow = naturalCharacter.getChildAt(1)
-            val bodyHeight = (characterHeight - fixed).coerceAtLeast(1)
-            bodyRow.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                bodyHeight,
+        (tailView?.parent as? android.view.ViewGroup)?.removeView(tailView)
+        tailView = null
+        addTailView()
+        if (animate && animationsEnabled()) {
+            contentView?.startAnimation(
+                AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_exit),
             )
         }
-        column.layoutParams = FrameLayout.LayoutParams(columnWidth, columnHeight).apply {
-            leftMargin = columnLeft
-            topMargin = columnTop
+    }
+
+    private data class BodyRect(val left: Int, val top: Int, val right: Int, val bottom: Int)
+
+    private fun bodyRect(): BodyRect {
+        val tailShort = ceil(plan.tailBudgetPx.toDouble()).toInt().coerceAtLeast(0)
+        val chipHeight = if (mode == SpeechBubbleMode.REPLY) plan.chipHeightPx else 0
+        val gap = if (mode == SpeechBubbleMode.REPLY) {
+            ceil(plan.zoneGapPx.toDouble()).toInt()
+        } else {
+            0
         }
-        column.measure(
-            View.MeasureSpec.makeMeasureSpec(columnWidth, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(columnHeight, View.MeasureSpec.EXACTLY),
-        )
-        column.layout(columnLeft, columnTop, columnLeft + columnWidth, columnTop + columnHeight)
-        column.requestLayout()
+        val actions = if (mode == SpeechBubbleMode.REPLY && plan.showActions) {
+            plan.actionRowPx
+        } else {
+            0
+        }
+        val left = if (side == BubblePreviewSide.LEFT) tailShort else 0
+        val right = plan.windowWidthPx -
+            if (side == BubblePreviewSide.RIGHT) tailShort else 0
+        val topReserve = if (side == BubblePreviewSide.BELOW) tailShort else 0
+        val bottomReserve = if (side == BubblePreviewSide.ABOVE) tailShort else 0
+        val top = chipHeight + gap + actions + topReserve
+        val bottom = plan.windowHeightPx - bottomReserve
+        return BodyRect(left, top.coerceAtLeast(0), max(left + 1, right), max(top + 1, bottom))
     }
 
-    private fun resolveTail(
-        direction: BubblePreviewTailDirection,
-        body: BubblePreviewTailRect,
-    ): com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewTailLayout? {
-        if (direction == BubblePreviewTailDirection.NONE) return null
-        val point = anchor
-        // Tail geometry works in the same coordinate space as the body: the
-        // window's root-relative pixels, not raw screen coordinates. The root
-        // origin is the display origin plus the window's currently applied
-        // position; omitting appliedX/Y shifts the tail toward an edge whenever
-        // the compact window is not at the display origin.
-        val rootOriginX = displayLeft + appliedX
-        val rootOriginY = displayTop + appliedY
-        val anchorX = (point?.x?.minus(rootOriginX)) ?: (body.left + body.width / 2f)
-        val anchorY = (point?.y?.minus(rootOriginY)) ?: (body.top + body.height / 2f)
-        val resolved = BubblePreviewTailGeometry.resolve(
-            BubblePreviewTailRequest(
-                direction = direction,
-                characterBody = body,
-                anchorX = anchorX,
-                anchorY = anchorY,
-                characterScale = characterScaleForPlan(),
-                density = density,
-                hasUserSummary = plan.includeUserSummary,
-            ),
-        )
-        val rect = resolved.rect ?: return null
-        val rootLeft = body.left + rect.left
-        val rootTop = body.top + rect.top
-        if (!rootLeft.isFinite() || !rootTop.isFinite()) return null
-        if (rootLeft < -0.5f || rootTop < -0.5f) return null
-        if (rootLeft + rect.width > plan.windowWidthPx + 0.5f) return null
-        if (rootTop + rect.height > plan.windowHeightPx + 0.5f) return null
-        return resolved
+    private fun buildInputFace(context: Context): FrameLayout {
+        val frame = FrameLayout(context)
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(
+                plan.padHorizontalPx.roundToInt(),
+                plan.padVerticalPx.roundToInt(),
+                plan.padHorizontalPx.roundToInt(),
+                plan.padVerticalPx.roundToInt(),
+            )
+            background = speechDrawable(
+                R.drawable.bf_speech_input_body,
+                inputFill,
+                inputStroke,
+                plan.cornerRadiusPx,
+            )
+        }
+        val edit = EditText(context).apply {
+            background = null
+            setTextColor(inputText)
+            setHintTextColor(inputHint)
+            hint = context.getString(R.string.bf_speech_hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
+            includeFontPadding = false
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            maxLines = plan.bodyLines.coerceAtLeast(1)
+            minLines = 1
+            isSingleLine = false
+            ellipsize = null
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            isSaveEnabled = false
+            setPadding(0, 0, dp(4), 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+        }
+        inputView = edit
+        edit.setText(input?.text.orEmpty())
+        edit.setSelection(edit.text?.length ?: 0)
+        edit.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (applyingInputText) return
+                val text = s?.toString().orEmpty()
+                val updated = SpeechInputSnapshot(text = text, sendEnabled = text.isNotBlank())
+                input = updated
+                sendView?.isEnabled = updated.sendEnabled
+                onInputDraftChanged(text)
+            }
+        })
+        row.addView(edit)
+
+        val expand = ImageView(context).apply {
+            setImageResource(R.drawable.bf_speech_ic_expand)
+            setColorFilter(iconColor)
+            contentDescription = context.getString(R.string.bf_speech_expand_cd)
+            background = ContextCompat.getDrawable(context, R.drawable.bf_speech_btn_expand_bg)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            isClickable = true
+            isFocusable = false
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            layoutParams = LinearLayout.LayoutParams(touchPx(), touchPx()).apply {
+                leftMargin = dp(4)
+            }
+            setOnClickListener {
+                onInputExpand(edit.text?.toString().orEmpty())
+            }
+        }
+        row.addView(expand)
+
+        val send = TextView(context).apply {
+            text = context.getString(R.string.bf_speech_send)
+            contentDescription = context.getString(R.string.bf_speech_send)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
+            setTextColor(
+                ContextCompat.getColorStateList(
+                    context,
+                    R.color.bf_speech_send_text_selector,
+                ),
+            )
+            includeFontPadding = false
+            background = ContextCompat.getDrawable(context, R.drawable.bf_speech_btn_send)
+            isClickable = true
+            isFocusable = false
+            minWidth = touchPx()
+            minHeight = touchPx()
+            layoutParams = LinearLayout.LayoutParams(
+                max(touchPx(), dp(52)),
+                touchPx(),
+            ).apply { leftMargin = dp(4) }
+            isEnabled = input?.sendEnabled == true
+            setOnClickListener {
+                val text = edit.text?.toString().orEmpty()
+                if (text.isNotBlank()) onInputSend(text)
+            }
+        }
+        sendView = send
+        row.addView(send)
+
+        bodyContainer = row
+        frame.addView(row)
+        return frame
     }
 
-    private fun characterScaleForPlan(): Float {
-        // Invert the k scale used by the layout plan: k = clamp(S/0.85,...).
-        val base = plan.cornerRadiusPx / (BubblePreviewScalePolicy.CORNER_DP * density)
-        return (base * 0.85f).coerceIn(0.50f, 1.30f)
+    private fun buildReplyFace(context: Context): FrameLayout {
+        val frame = FrameLayout(context)
+        val snapshot = content
+        if (plan.showReplyBody) {
+            val body = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP or Gravity.START
+                setPadding(
+                    plan.padHorizontalPx.roundToInt(),
+                    plan.padVerticalPx.roundToInt(),
+                    plan.padHorizontalPx.roundToInt(),
+                    plan.padVerticalPx.roundToInt(),
+                )
+                background = replyDrawable()
+            }
+            val text = TextView(context).apply {
+                text = bodyText()
+                maxLines = plan.bodyLines.coerceAtLeast(1)
+                ellipsize = TextUtils.TruncateAt.END
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
+                setTextColor(replyText)
+                includeFontPadding = false
+                gravity = Gravity.TOP or Gravity.START
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f,
+                )
+            }
+            bodyView = text
+            bodyContainer = body
+            body.addView(text)
+            if (snapshot?.visibleState == BubbleVisibleState.THINKING) {
+                val dots = ImageView(context).apply {
+                    scaleType = ImageView.ScaleType.FIT_XY
+                    layoutParams = LinearLayout.LayoutParams(
+                        dp(15),
+                        dp(3),
+                    ).apply { leftMargin = dp(4) }
+                }
+                thinkingDots = dots
+                body.addView(dots)
+                startThinkingDots(dots)
+            }
+            frame.addView(body)
+        }
+        if (plan.includeUserSummary) {
+            val chip = TextView(context).apply {
+                text = content?.userSummary.orEmpty()
+                maxLines = 1
+                setSingleLine(true)
+                ellipsize = TextUtils.TruncateAt.END
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.labelTextPx)
+                setTextColor(userText)
+                includeFontPadding = false
+                gravity = Gravity.CENTER_VERTICAL
+                val chipPad = (12f * (plan.speechScale / 0.85f) * density).roundToInt()
+                setPadding(chipPad, 0, chipPad, 0)
+                background = speechDrawable(
+                    R.drawable.bf_speech_user_chip,
+                    userFill,
+                    userStroke,
+                    14f * (plan.speechScale / 0.85f) * density,
+                )
+                layoutParams = FrameLayout.LayoutParams(
+                    min(plan.chipWidthPx.coerceAtLeast(1), plan.windowWidthPx),
+                    plan.chipHeightPx.coerceAtLeast(1),
+                ).apply {
+                    leftMargin = plan.windowWidthPx -
+                        min(plan.chipWidthPx.coerceAtLeast(1), plan.windowWidthPx)
+                    topMargin = 0
+                }
+                setOnClickListener { onRecord() }
+            }
+            chipView = chip
+            frame.addView(chip)
+        }
+        if (plan.showActions && snapshot != null) {
+            val actions = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL or Gravity.END
+                layoutParams = FrameLayout.LayoutParams(
+                    dp(INPUT_MIN_TOUCH_DP * 2),
+                    plan.actionRowPx.coerceAtLeast(1),
+                ).apply {
+                    leftMargin = plan.windowWidthPx - dp(INPUT_MIN_TOUCH_DP * 2)
+                    topMargin = plan.chipHeightPx + ceil(plan.zoneGapPx.toDouble()).toInt()
+                }
+            }
+            val stop = actionIcon(
+                context,
+                R.drawable.bf_speech_ic_stop,
+                R.string.bf_speech_stop_cd,
+            ) { onStop() }
+            val close = actionIcon(
+                context,
+                R.drawable.bf_speech_ic_close,
+                R.string.bf_speech_close_cd,
+            ) { requestUserClose() }
+            actions.addView(stop, LinearLayout.LayoutParams(touchPx(), touchPx()))
+            actions.addView(close, LinearLayout.LayoutParams(touchPx(), touchPx()))
+            frame.addView(actions)
+        }
+        frame.setOnClickListener { onRecord() }
+        return frame
     }
 
-    private fun addTailView(
-        rect: BubblePreviewTailRect,
-        bodyLeft: Int,
-        bodyTop: Int,
-    ) {
+    private fun actionIcon(
+        context: Context,
+        icon: Int,
+        description: Int,
+        action: () -> Unit,
+    ): ImageView = ImageView(context).apply {
+        setImageResource(icon)
+        setColorFilter(iconColor)
+        contentDescription = context.getString(description)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(12), dp(12), dp(12), dp(12))
+        isClickable = true
+        isFocusable = false
+        setOnClickListener { action() }
+    }
+
+    private fun addTailView() {
+        if (plan.tailBudgetPx <= 0f) return
+        if (mode == SpeechBubbleMode.REPLY && !plan.showReplyBody) return
         val direction = tailDirectionFor(side)
-        val tailWidth = ceil(rect.width.toDouble()).toInt().coerceAtLeast(1)
-        val tailHeight = ceil(rect.height.toDouble()).toInt().coerceAtLeast(1)
-        val view: View = if (palette.usesPackCharacterColors) {
+        val body = bodyRect()
+        val k = plan.speechScale / 0.85f
+        val width: Int
+        val height: Int
+        when (direction) {
+            BubblePreviewTailDirection.LEFT,
+            BubblePreviewTailDirection.RIGHT,
+            -> {
+                width = ceil(resourceDp(R.dimen.bf_speech_tail_side_w) * k).toInt().coerceAtLeast(1)
+                height = ceil(resourceDp(R.dimen.bf_speech_tail_side_h) * k).toInt().coerceAtLeast(1)
+            }
+            else -> {
+                width = ceil(resourceDp(R.dimen.bf_speech_tail_w) * k).toInt().coerceAtLeast(1)
+                height = ceil(resourceDp(R.dimen.bf_speech_tail_h) * k).toInt().coerceAtLeast(1)
+            }
+        }
+        val x: Int
+        val y: Int
+        val bodyCenterX = (body.left + body.right) / 2 - width / 2
+        val bodyCenterY = (body.top + body.bottom) / 2 - height / 2
+        when (direction) {
+            BubblePreviewTailDirection.DOWN -> {
+                x = bodyCenterX
+                y = body.bottom - dp(1)
+            }
+            BubblePreviewTailDirection.UP -> {
+                x = bodyCenterX
+                y = body.top - height + dp(1)
+            }
+            BubblePreviewTailDirection.LEFT -> {
+                x = body.left - width + dp(1)
+                y = bodyCenterY
+            }
+            BubblePreviewTailDirection.RIGHT -> {
+                x = body.right - dp(1)
+                y = bodyCenterY
+            }
+            BubblePreviewTailDirection.NONE -> return
+        }
+        val view: View = if (usePackReply) {
             BubbleTailView(
                 context = root.context,
                 direction = direction,
-                fillColor = palette.character.fill.argb,
-                strokeColor = palette.character.line.argb,
+                fillColor = replyFill,
+                strokeColor = replyStroke,
                 density = density,
             )
         } else {
@@ -533,21 +804,22 @@ internal class BubblePreviewWindow(
             }
         }
         tailView = view
-        root.addView(
+        val parent = contentView as? FrameLayout ?: return
+        parent.addView(
             view,
-            FrameLayout.LayoutParams(tailWidth, tailHeight).apply {
-                leftMargin = (bodyLeft + rect.left).roundToInt()
-                topMargin = (bodyTop + rect.top).roundToInt()
+            FrameLayout.LayoutParams(width, height).apply {
+                leftMargin = x
+                topMargin = y
             },
         )
     }
 
     private fun tailResource(direction: BubblePreviewTailDirection): Int = when (direction) {
-        BubblePreviewTailDirection.DOWN -> R.drawable.bf_bubble_tail_down
-        BubblePreviewTailDirection.UP -> R.drawable.bf_bubble_tail_up
-        BubblePreviewTailDirection.LEFT -> R.drawable.bf_bubble_tail_left
-        BubblePreviewTailDirection.RIGHT -> R.drawable.bf_bubble_tail_right
-        BubblePreviewTailDirection.NONE -> R.drawable.bf_bubble_tail_down
+        BubblePreviewTailDirection.DOWN -> R.drawable.bf_speech_tail_down
+        BubblePreviewTailDirection.UP -> R.drawable.bf_speech_tail_up
+        BubblePreviewTailDirection.LEFT -> R.drawable.bf_speech_tail_left
+        BubblePreviewTailDirection.RIGHT -> R.drawable.bf_speech_tail_right
+        BubblePreviewTailDirection.NONE -> R.drawable.bf_speech_tail_down
     }
 
     private fun tailDirectionFor(side: BubblePreviewSide): BubblePreviewTailDirection =
@@ -559,167 +831,53 @@ internal class BubblePreviewWindow(
             BubblePreviewSide.LEFT -> BubblePreviewTailDirection.RIGHT
         }
 
-    private fun isChip(): Boolean =
-        content.visibleState == BubbleVisibleState.COLLAPSED || plan.collapsedChip
-
-    private fun rootDescription(): String = when {
-        isChip() && content.isFailureChip -> "打开对话记录"
-        isChip() -> "展开气泡"
-        else -> "打开对话记录"
+    private fun updateWindow() {
+        if (!added || destroyedForCleanup) return
+        try {
+            windowManager.updateViewLayout(root, params)
+        } catch (error: Exception) {
+            onInputNoSpace()
+        }
     }
 
-    private fun buildColumn(context: Context): LinearLayout {
-        val column = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
+    private fun updateTextViews() {
+        val snapshot = content ?: return
+        if (plan.showReplyBody) {
+            bodyView?.text = bodyText()
+            applyBodyDecoration()
+            updateThinkingDots()
         }
-        val userHeight = if (plan.includeUserSummary) {
-            ceil(2f * plan.padVerticalPx + plan.userLineHeightPx).toInt().coerceAtLeast(1)
-        } else {
-            0
-        }
-        if (plan.includeUserSummary) {
-            column.addView(
-                TextView(context).apply {
-                    text = "${root.context.getString(R.string.bf_bubble_user_label)}：${content.userSummary}"
-                    maxLines = 1
-                    ellipsize = TextUtils.TruncateAt.END
-                    setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
-                    setTextColor(palette.user.text.argb)
-                    includeFontPadding = false
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(
-                        plan.padHorizontalPx.roundToInt(),
-                        0,
-                        plan.padHorizontalPx.roundToInt(),
-                        0,
-                    )
-                    background = bodyDrawable(
-                        resId = R.drawable.bf_bubble_user_body,
-                        fill = palette.user.fill.argb,
-                        stroke = palette.user.line.argb,
-                        usePack = false,
-                    )
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        userHeight,
-                    )
-                },
-            )
-            column.addView(
-                View(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        ceil(plan.zoneGapPx).toInt().coerceAtLeast(1),
-                    )
-                },
-            )
-        }
-
-        val character = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                plan.padHorizontalPx.roundToInt(),
-                plan.padVerticalPx.roundToInt(),
-                plan.padHorizontalPx.roundToInt(),
-                plan.padVerticalPx.roundToInt(),
-            )
-            background = bodyDrawable(
-                resId = R.drawable.bf_bubble_character_body,
-                fill = palette.character.fill.argb,
-                stroke = palette.character.line.argb,
-                usePack = palette.usesPackCharacterColors,
-            )
-        }
-        character.addView(
-            TextView(context).apply {
-                text = content.roleName
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.labelTextPx)
-                setTextColor(palette.character.text.argb)
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                includeFontPadding = false
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    ceil(plan.nameLineHeightPx).toInt(),
-                )
-            },
-        )
-        character.addView(buildBody(context))
-        character.addView(
-            View(context).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    ceil(plan.actionGapPx).toInt().coerceAtLeast(1),
-                )
-            },
-        )
-        character.addView(buildActions(context))
-        column.addView(
-            character,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                ceil(
-                    2f * plan.padVerticalPx + plan.nameLineHeightPx +
-                        plan.bodyLines * plan.bodyLineHeightPx +
-                        plan.actionGapPx + plan.actionRowPx,
-                ).toInt(),
-            ),
-        )
-        return column
+        chipView?.text = snapshot.userSummary
+        root.contentDescription = rootDescription()
     }
 
-    /**
-     * Body slot: a single-line thinking row with the formal animated three dots,
-     * or the fixed multi-line body text. The slot height never changes with the
-     * text content, so a stream delta cannot grow the window.
-     */
-    private fun buildBody(context: Context): View {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.TOP or Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                ceil(plan.bodyLines.coerceAtLeast(1) * plan.bodyLineHeightPx).toInt(),
-            )
-        }
-        val body = TextView(context).apply {
-            text = bodyText()
-            maxLines = plan.bodyLines.coerceAtLeast(1)
-            ellipsize = TextUtils.TruncateAt.END
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
-            setTextColor(palette.character.text.argb)
-            includeFontPadding = false
-            gravity = Gravity.TOP or Gravity.START
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
-        }
-        bodyView = body
-        row.addView(body)
-        if (content.visibleState == BubbleVisibleState.THINKING) {
-            val dots = ImageView(context).apply {
-                scaleType = ImageView.ScaleType.FIT_XY
-                layoutParams = LinearLayout.LayoutParams(dp(15), dp(3)).apply {
-                    leftMargin = dp(4)
-                }
+    private fun updateInputViews() {
+        val state = input ?: return
+        val edit = inputView ?: return
+        if (edit.text?.toString() != state.text) {
+            applyingInputText = true
+            try {
+                edit.setText(state.text)
+                edit.setSelection(edit.text?.length ?: 0)
+            } finally {
+                applyingInputText = false
             }
-            thinkingDots = dots
-            row.addView(dots)
-            startThinkingDots(dots)
         }
-        applyBodyDecoration(body)
-        return row
+        sendView?.isEnabled = state.sendEnabled
+        root.contentDescription = rootDescription()
     }
 
-    private fun applyBodyDecoration(body: TextView) {
+    private fun applyBodyDecoration() {
+        val body = bodyView ?: return
+        val snapshot = content ?: return
         val icon = when {
-            content.visibleState == BubbleVisibleState.THINKING -> 0
-            content.phase == BubbleTurnPhase.FAILED ||
-                content.visibleState == BubbleVisibleState.ERROR ->
-                R.drawable.bf_bubble_ic_error
-            content.status == BubbleTurnStatus.STOPPED ||
-                content.phase == BubbleTurnPhase.STOPPED ->
-                R.drawable.bf_bubble_ic_stop
+            snapshot.visibleState == BubbleVisibleState.THINKING -> 0
+            snapshot.visibleState == BubbleVisibleState.ERROR ||
+                snapshot.phase == BubbleTurnPhase.FAILED ->
+                R.drawable.bf_speech_ic_error
+            snapshot.status == BubbleTurnStatus.STOPPED ||
+                snapshot.phase == BubbleTurnPhase.STOPPED ->
+                R.drawable.bf_speech_ic_stop
             else -> 0
         }
         if (icon == 0) {
@@ -731,24 +889,19 @@ internal class BubblePreviewWindow(
     }
 
     private fun updateThinkingDots() {
-        val shouldThink = content.visibleState == BubbleVisibleState.THINKING
-        val dots = thinkingDots
-        if (dots == null) return
+        val dots = thinkingDots ?: return
+        val shouldThink = content?.visibleState == BubbleVisibleState.THINKING
         dots.visibility = if (shouldThink) View.VISIBLE else View.GONE
-        if (shouldThink) {
-            startThinkingDots(dots)
-        } else {
-            (dots.drawable as? Animatable)?.stop()
-        }
+        if (shouldThink) startThinkingDots(dots) else (dots.drawable as? Animatable)?.stop()
     }
 
     private fun startThinkingDots(dots: ImageView) {
         (dots.drawable as? Animatable)?.stop()
         if (animationsEnabled()) {
-            dots.setImageResource(R.drawable.bf_bubble_dots)
+            dots.setImageResource(R.drawable.bf_speech_dots)
             (dots.drawable as? Animatable)?.start()
         } else {
-            dots.setImageResource(R.drawable.bf_bubble_ellipsis_static)
+            dots.setImageResource(R.drawable.bf_speech_ellipsis_static)
         }
     }
 
@@ -774,114 +927,10 @@ internal class BubblePreviewWindow(
         )
     }
 
-    private fun buildChip(context: Context): LinearLayout {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(
-                plan.padHorizontalPx.roundToInt(),
-                0,
-                plan.padHorizontalPx.roundToInt(),
-                0,
-            )
-            background = bodyDrawable(
-                resId = R.drawable.bf_bubble_chip,
-                fill = palette.character.fill.argb,
-                stroke = palette.character.line.argb,
-                usePack = palette.usesPackCharacterColors,
-            )
-        }
-        val chip = TextView(context).apply {
-            text = chipText()
-            maxLines = 1
-            setSingleLine(true)
-            ellipsize = TextUtils.TruncateAt.END
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
-            setTextColor(palette.character.text.argb)
-            includeFontPadding = false
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, plan.windowHeightPx, 1f)
-        }
-        chipView = chip
-        row.addView(chip)
-        row.addView(
-            action(
-                context = context,
-                action = BubblePreviewAction.CLOSE,
-                sizePx = plan.windowHeightPx,
-            ),
-            LinearLayout.LayoutParams(actionWidthPx(BubblePreviewAction.CLOSE), plan.windowHeightPx),
-        )
-        return row
-    }
-
-    private fun buildActions(context: Context): LinearLayout {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                plan.actionRowPx,
-            )
-        }
-        val labels = plan.actionLabels.ifEmpty {
-            listOf(BubblePreviewAction.RECORDS, BubblePreviewAction.CLOSE)
-        }
-        labels.forEach { action ->
-            row.addView(
-                action(context, action, plan.actionRowPx),
-                LinearLayout.LayoutParams(actionWidthPx(action), plan.actionRowPx),
-            )
-        }
-        return row
-    }
-
-    private fun action(
-        context: Context,
-        action: BubblePreviewAction,
-        sizePx: Int,
-    ): TextView {
-        val label = labelFor(action)
-        val target = actionWidthPx(action)
-        return TextView(context).apply {
-            text = label
-            contentDescription = descriptionFor(action)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            setSingleLine(true)
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.labelTextPx)
-            setTextColor(
-                if (action == BubblePreviewAction.STOP) {
-                    palette.character.text.argb
-                } else {
-                    palette.character.text.argb
-                },
-            )
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            includeFontPadding = false
-            minWidth = target
-            minHeight = sizePx
-            iconFor(action)?.let { icon ->
-                setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-                compoundDrawablePadding = dp(4)
-            }
-            isClickable = true
-            isFocusable = false
-            setOnClickListener {
-                when (action) {
-                    BubblePreviewAction.STOP -> onStop()
-                    BubblePreviewAction.VIEW_ALL,
-                    BubblePreviewAction.RECORDS,
-                    -> onRecord()
-                    BubblePreviewAction.CLOSE -> requestUserClose()
-                }
-            }
-        }
-    }
-
     private fun requestUserClose() {
         if (destroyedForCleanup || closingForUser) return
         closingForUser = true
+        releaseInputFocus()
         val finish = Runnable {
             exitRunnable = null
             if (destroyedForCleanup) return@Runnable
@@ -898,122 +947,73 @@ internal class BubblePreviewWindow(
         }
         child.clearAnimation()
         try {
-            child.startAnimation(AnimationUtils.loadAnimation(root.context, R.anim.bf_bubble_exit))
+            child.startAnimation(AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_exit))
             exitRunnable = finish
-            // Ordinary user close may show the 80 ms exit; every invalidation
-            // path (pref, click-through, hidden, revoke) still removes
-            // immediately.
+            // Ordinary user close may show the 80 ms exit; click-through,
+            // hiding, revoke and round invalidation still remove immediately.
             root.postDelayed(finish, EXIT_ANIMATION_MILLIS)
         } catch (error: Exception) {
             finish.run()
         }
     }
 
-    private fun iconFor(action: BubblePreviewAction): Int? = when (action) {
-        BubblePreviewAction.STOP -> R.drawable.bf_bubble_ic_stop
-        BubblePreviewAction.RECORDS -> R.drawable.bf_bubble_ic_record
-        BubblePreviewAction.CLOSE -> R.drawable.bf_bubble_ic_close
-        BubblePreviewAction.VIEW_ALL -> null
-    }
-
-    /**
-     * Real text width plus icon/padding, never below the 44 dp target and never
-     * truncated or shrunk. The controller already selected a label set that fits
-     * the planned content width (including the side-tail consumption).
-     */
-    private fun actionWidthPx(action: BubblePreviewAction): Int {
-        val minimum = plan.actionRowPx.coerceAtLeast(1)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            textSize = plan.labelTextPx
-        }
-        val textWidth = paint.measureText(labelFor(action))
-        val padding = 2f * BubblePreviewActionLayout.HORIZONTAL_PADDING_DP * density
-        val icon = if (iconFor(action) != null) {
-            (BubblePreviewActionLayout.ICON_DP + BubblePreviewActionLayout.ICON_GAP_DP) * density
-        } else {
-            0f
-        }
-        return max(minimum, ceil(textWidth + padding + icon).toInt())
-    }
-
-    private fun labelFor(action: BubblePreviewAction): String = when (action) {
-        BubblePreviewAction.STOP -> root.context.getString(R.string.bf_bubble_stop)
-        BubblePreviewAction.VIEW_ALL -> root.context.getString(R.string.bf_bubble_view_all)
-        BubblePreviewAction.RECORDS -> root.context.getString(R.string.bf_bubble_record)
-        BubblePreviewAction.CLOSE -> ""
-    }
-
-    private fun descriptionFor(action: BubblePreviewAction): String = when (action) {
-        BubblePreviewAction.STOP -> root.context.getString(R.string.bf_bubble_stop_cd)
-        BubblePreviewAction.VIEW_ALL -> root.context.getString(R.string.bf_bubble_view_all_cd)
-        BubblePreviewAction.RECORDS -> root.context.getString(R.string.bf_bubble_record_cd)
-        BubblePreviewAction.CLOSE -> root.context.getString(R.string.bf_bubble_close_cd)
-    }
-
     private fun bodyText(): String {
-        val visible = content.visibleText
-        val state = content.visibleState
+        val snapshot = content ?: return ""
+        val visible = snapshot.visibleText
+        val state = snapshot.visibleState
         if (state == BubbleVisibleState.THINKING) {
-            return root.context.getString(R.string.bf_bubble_thinking)
+            return root.context.getString(R.string.bf_speech_thinking)
         }
-        if (state == BubbleVisibleState.ERROR) {
-            val failure = failureText.ifBlank {
-                root.context.getString(R.string.bf_bubble_no_content)
-            }
+        if (state == BubbleVisibleState.ERROR || snapshot.phase == BubbleTurnPhase.FAILED) {
+            val failure = root.context.getString(R.string.bf_speech_error)
             return if (visible.isBlank()) failure else visible + "\n" + failure
         }
-        var text = visible
-        if (content.status == BubbleTurnStatus.STOPPED || content.phase == BubbleTurnPhase.STOPPED) {
-            val suffix = root.context.getString(R.string.bf_bubble_stopped_suffix)
-            text = if (text.isBlank()) {
-                root.context.getString(R.string.bf_bubble_stopped)
-            } else {
-                text + "\n" + suffix
-            }
+        if (snapshot.status == BubbleTurnStatus.STOPPED ||
+            snapshot.phase == BubbleTurnPhase.STOPPED
+        ) {
+            val stopped = root.context.getString(R.string.bf_speech_stopped)
+            return if (visible.isBlank()) stopped else visible + "\n" + stopped
         }
-        if ((content.hasMore || content.overflow) && text.isNotBlank() && !text.endsWith("…")) {
-            text += "…"
+        if ((snapshot.hasMore || snapshot.overflow) &&
+            visible.isNotBlank() && !visible.endsWith("…")
+        ) {
+            return visible + "…"
         }
-        return text.ifBlank { root.context.getString(R.string.bf_bubble_thinking) }
+        return visible
     }
 
-    private fun chipText(): String {
-        if (content.isFailureChip) return root.context.getString(R.string.bf_bubble_error_chip)
-        val visible = content.visibleText.ifBlank {
-            if (content.status == BubbleTurnStatus.STOPPED) {
-                root.context.getString(R.string.bf_bubble_stopped)
-            } else {
-                "…"
-            }
-        }
-        return root.context.getString(
-            R.string.bf_bubble_chip_format,
-            content.roleName,
-            visible,
-        )
+    private fun rootDescription(): String = when (mode) {
+        SpeechBubbleMode.INPUT -> root.context.getString(R.string.bf_speech_hint)
+        SpeechBubbleMode.REPLY -> root.context.getString(R.string.bf_speech_expand_cd)
     }
 
-    /**
-     * Default day/night modes use the formal shape resource (mutating only the
-     * k-scaled corner radius). A dynamic pack overrides only the character zone,
-     * so that path uses a runtime GradientDrawable with separate fill/stroke.
-     */
-    private fun bodyDrawable(
-        resId: Int,
-        fill: Int,
-        stroke: Int,
-        usePack: Boolean,
-    ): Drawable {
-        if (!usePack) {
-            val resource = ContextCompat.getDrawable(root.context, resId)?.mutate()
+    private fun replyDrawable(): Drawable {
+        if (!usePackReply) {
+            val resource = ContextCompat.getDrawable(
+                root.context,
+                R.drawable.bf_speech_reply_body,
+            )?.mutate()
             if (resource is GradientDrawable) {
                 resource.cornerRadius = plan.cornerRadiusPx
                 return resource
             }
             if (resource != null) return resource
         }
-        return rounded(fill, stroke, plan.cornerRadiusPx)
+        return rounded(replyFill, replyStroke, plan.cornerRadiusPx)
+    }
+
+    private fun speechDrawable(
+        resId: Int,
+        fill: Int,
+        stroke: Int,
+        radius: Float,
+    ): Drawable {
+        val resource = ContextCompat.getDrawable(root.context, resId)?.mutate()
+        if (resource is GradientDrawable) {
+            resource.cornerRadius = radius
+            return resource
+        }
+        return if (resource != null) resource else rounded(fill, stroke, radius)
     }
 
     private fun rounded(fill: Int, stroke: Int, radius: Float): GradientDrawable =
@@ -1024,12 +1024,83 @@ internal class BubblePreviewWindow(
             cornerRadius = radius
         }
 
+    private fun installImeListener() {
+        try {
+            ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+                if (mode == SpeechBubbleMode.INPUT && added && !destroyedForCleanup) {
+                    val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                    val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
+                    clampInputAboveIme(ime, visible)
+                }
+                insets
+            }
+        } catch (error: Exception) {
+            // A missing insets callback must not break the add path; the host
+            // then falls back to the record panel if the keyboard cannot fit.
+        }
+    }
+
+    /**
+     * Uses the attached root's real IME inset, never a guessed keyboard height.
+     * If the compact input balloon cannot fit above the keyboard, notify the
+     * host once so it can open the record panel instead of pressing send under
+     * the keyboard or retrying window geometry in a loop.
+     */
+    private fun clampInputAboveIme(imeBottomPx: Int, visible: Boolean) {
+        if (!visible || imeBottomPx <= 0) return
+        imeSeen = true
+        imeCheckRunnable?.let { root.removeCallbacks(it) }
+        imeCheckRunnable = null
+        if (imeFailureNotified) return
+        val margin = dp(12)
+        val visibleBottom = displayHeight - imeBottomPx
+        val maxY = visibleBottom - plan.windowHeightPx - margin
+        if (maxY < margin) {
+            imeFailureNotified = true
+            onInputNoSpace()
+            return
+        }
+        if (params.y > maxY) {
+            params.y = maxY
+            try {
+                windowManager.updateViewLayout(root, params)
+            } catch (error: Exception) {
+                imeFailureNotified = true
+                onInputNoSpace()
+            }
+        }
+    }
+
+    /**
+     * No trusted IME inset and no keyboard after the explicit show request means
+     * the keyboard path failed. Notify once so the host opens the record panel
+     * rather than leaving a dead input balloon.
+     */
+    private fun scheduleImeFailureCheck() {
+        imeCheckRunnable?.let { root.removeCallbacks(it) }
+        val runnable = Runnable {
+            imeCheckRunnable = null
+            if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return@Runnable
+            if (!imeSeen) onInputNoSpace()
+        }
+        imeCheckRunnable = runnable
+        root.postDelayed(runnable, IME_FAILURE_CHECK_MILLIS)
+    }
+
+    private fun touchPx(): Int = ceil(resourceDp(R.dimen.bf_speech_action_min))
+        .toInt()
+        .coerceAtLeast(1)
+
+    private fun resourceDp(id: Int): Float = root.context.resources.getDimension(id)
+
+    private fun color(id: Int): Int = ContextCompat.getColor(root.context, id)
+
     private fun dp(value: Int): Int = (value * density).roundToInt()
 }
 
 /**
  * Lightweight Canvas tail for a cached pack palette. The path mirrors the
- * formal bf_bubble_tail_* vector (12x6 / 6x12 viewport) but keeps fill and
+ * formal bf_speech_tail_* vector (12x6 / 6x12 viewport) but keeps fill and
  * stroke as separate layers, which a single vector tint cannot do.
  */
 private class BubbleTailView(

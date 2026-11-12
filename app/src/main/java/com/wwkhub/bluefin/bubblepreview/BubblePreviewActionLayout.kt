@@ -84,7 +84,7 @@ internal object BubblePreviewActionLayout {
                 BubblePreviewAction.RECORDS,
                 BubblePreviewAction.CLOSE,
             )
-            BubbleVisibleState.COLLAPSED -> listOf(BubblePreviewAction.CLOSE)
+            BubbleVisibleState.CHIP_LINGER -> listOf(BubblePreviewAction.CLOSE)
             BubbleVisibleState.HIDDEN -> return null
         }
         if (fits(primary)) return primary

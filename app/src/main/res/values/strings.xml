@@ -186,4 +186,7 @@
     <string name="import_warn_large">这个角色包超过 32 MiB，导入可能需要一些时间。仍要继续吗？</string>
     <string name="import_no_actions">这个角色没有可做的动作。</string>
     <string name="import_continue">继续导入</string>
+    <string name="speech_click_through_fallback">点击穿透已开，气泡暂不显示；请在记录里继续</string>
+    <string name="speech_unavailable_fallback">气泡暂不可用，回复仍在『记录』中。</string>
+    <string name="speech_busy_fallback">正在回复，可先停止</string>
 </resources>

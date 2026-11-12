@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 蓝鳍头顶说话气泡 token；浅/深只换值。文件名 bf_speech_colors.xml，勿覆盖工程 colors.xml。 -->
+    <color name="bf_speech_reply_fill">#1E4A6E</color>
+    <color name="bf_speech_reply_text">#E8F6FF</color>
+    <color name="bf_speech_reply_stroke">#7EC8F5</color>
+    <color name="bf_speech_input_fill">#1E4A6E</color>
+    <color name="bf_speech_input_text">#E8F6FF</color>
+    <color name="bf_speech_input_stroke">#7EC8F5</color>
+    <color name="bf_speech_input_hint">#A3C8E0</color>
+    <color name="bf_speech_input_cursor">#7EC8F5</color>
+    <color name="bf_speech_user_fill">#1A3A52</color>
+    <color name="bf_speech_user_text">#E8F6FF</color>
+    <color name="bf_speech_user_stroke">#7EC8F5</color>
+    <color name="bf_speech_send_fill">#7EC8F5</color>
+    <color name="bf_speech_send_fill_pressed">#5AAEE4</color>
+    <color name="bf_speech_send_fill_disabled">#2A4A62</color>
+    <color name="bf_speech_send_text">#0F3A5C</color>
+    <color name="bf_speech_send_text_disabled">#A3C8E0</color>
+    <color name="bf_speech_expand_bg">#163A58</color>
+    <color name="bf_speech_expand_bg_pressed">#0F3554</color>
+    <color name="bf_speech_icon">#7EC8F5</color>
+    <color name="bf_speech_icon_pressed">#B0D0E4</color>
+    <color name="bf_speech_icon_on_balloon">#E8F6FF</color>
+    <color name="bf_speech_dot">#7EC8F5</color>
+    <color name="bf_speech_status_stopped">#A3C8E0</color>
+    <color name="bf_speech_status_error">#FFC1B8</color>
+</resources>

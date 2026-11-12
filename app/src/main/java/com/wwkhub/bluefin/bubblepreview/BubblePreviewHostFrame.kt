@@ -65,6 +65,7 @@ internal data class BubblePreviewContent(
 
 internal const val BUBBLE_PREVIEW_SAFETY_MARGIN_DP = 12
 internal const val BUBBLE_PREVIEW_PET_GAP_DP = 6
+internal const val SPEECH_BUBBLE_PET_GAP_DP = 10
 internal const val BUBBLE_PREVIEW_ORB_GAP_DP = 8
 /** One actual character hit circle in screen pixels. */
 internal data class BubblePreviewHit(

@@ -321,11 +321,14 @@ class BubblePreviewStageCContractTest {
 
         val apply = methodBody(window, "    fun applyState(")
         assertTrue(apply.contains("rebuild("))
-        assertEquals(1, Regex("updateViewLayout\\(").findAll(apply).count())
+        assertTrue(apply.contains("updateWindow()"))
 
         val placement = methodBody(window, "    fun updatePlacement(")
-        assertEquals(1, Regex("updateViewLayout\\(").findAll(placement).count())
+        assertTrue(placement.contains("updateWindow()"))
         assertFalse(placement.contains("rebuild()"))
+
+        val updateWindow = methodBody(window, "    private fun updateWindow(")
+        assertEquals(1, Regex("updateViewLayout\\(").findAll(updateWindow).count())
     }
 
     @Test

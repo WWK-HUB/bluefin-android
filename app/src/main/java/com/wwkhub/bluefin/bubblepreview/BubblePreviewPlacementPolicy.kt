@@ -49,6 +49,7 @@ internal object BubblePreviewPlacementPolicy {
         density: Float,
         petGapDp: Float = 6f,
         orbGapDp: Float = 8f,
+        landscape: Boolean = false,
     ): BubblePreviewPlacementDecision {
         if (!safeBounds.isValid() || !characterBounds.isValid() || !anchor.isValid()) {
             return BubblePreviewPlacementDecision(null, null)
@@ -72,6 +73,7 @@ internal object BubblePreviewPlacementPolicy {
                 orbExclusion = orbExclusion,
                 plan = plan,
                 petGap = petGap,
+                landscape = landscape,
             ) ?: return@forEachIndexed
             if (planIndex == 0) {
                 compactFallback = best
@@ -92,6 +94,7 @@ internal object BubblePreviewPlacementPolicy {
                 orbExclusion = orbExclusion,
                 petGap = petGap,
                 hysteresisPx = (SIDE_HYSTERESIS_DP * density).roundToInt(),
+                landscape = landscape,
             )
         }
         return BubblePreviewPlacementDecision(null, null)
@@ -109,6 +112,7 @@ internal object BubblePreviewPlacementPolicy {
         orbExclusion: BubblePreviewRect?,
         petGap: Int,
         hysteresisPx: Int,
+        landscape: Boolean,
     ): BubblePreviewPlacementDecision {
         if (previous == null) return BubblePreviewPlacementDecision(candidate, null)
         if (previous.side == candidate.side) return BubblePreviewPlacementDecision(candidate, null)
@@ -161,8 +165,9 @@ internal object BubblePreviewPlacementPolicy {
         orbExclusion: BubblePreviewRect?,
         plan: BubblePreviewLayoutPlan,
         petGap: Int,
+        landscape: Boolean,
     ): BubblePreviewPlacement? {
-        val sideOrder = sideOrder(characterBounds, safeBounds)
+        val sideOrder = sideOrder(characterBounds, safeBounds, landscape)
         for (side in sideOrder) {
             val placed = candidate(side, safeBounds, characterBounds, anchor, plan, petGap) ?: continue
             if (!placementFits(placed, safeBounds, petExclusion, orbExclusion)) continue
@@ -182,23 +187,44 @@ internal object BubblePreviewPlacementPolicy {
     private fun sideOrder(
         characterBounds: BubblePreviewRect,
         safeBounds: BubblePreviewRect,
+        landscape: Boolean,
     ): List<BubblePreviewSide> {
         val characterCenterX = characterBounds.left.toLong() + characterBounds.right.toLong()
         val safeCenterX = safeBounds.left.toLong() + safeBounds.right.toLong()
+        // 方案 4.4: portrait prefers above, then the side facing screen centre,
+        // and only then below. Landscape starts side-on because height is tight.
         return if (characterCenterX < safeCenterX) {
-            listOf(
-                BubblePreviewSide.ABOVE,
-                BubblePreviewSide.BELOW,
-                BubblePreviewSide.RIGHT,
-                BubblePreviewSide.LEFT,
-            )
+            if (landscape) {
+                listOf(
+                    BubblePreviewSide.RIGHT,
+                    BubblePreviewSide.ABOVE,
+                    BubblePreviewSide.LEFT,
+                    BubblePreviewSide.BELOW,
+                )
+            } else {
+                listOf(
+                    BubblePreviewSide.ABOVE,
+                    BubblePreviewSide.RIGHT,
+                    BubblePreviewSide.LEFT,
+                    BubblePreviewSide.BELOW,
+                )
+            }
         } else {
-            listOf(
-                BubblePreviewSide.ABOVE,
-                BubblePreviewSide.BELOW,
-                BubblePreviewSide.LEFT,
-                BubblePreviewSide.RIGHT,
-            )
+            if (landscape) {
+                listOf(
+                    BubblePreviewSide.LEFT,
+                    BubblePreviewSide.ABOVE,
+                    BubblePreviewSide.RIGHT,
+                    BubblePreviewSide.BELOW,
+                )
+            } else {
+                listOf(
+                    BubblePreviewSide.ABOVE,
+                    BubblePreviewSide.LEFT,
+                    BubblePreviewSide.RIGHT,
+                    BubblePreviewSide.BELOW,
+                )
+            }
         }
     }
 

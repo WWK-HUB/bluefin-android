@@ -68,30 +68,29 @@ class BubblePreviewStageDContractTest {
     }
 
     @Test
-    fun formalShapesTailsIconsDotsAndAnimationsAreActuallyUsed() {
+    fun formalSpeechShapesTailsIconsDotsAndAnimationsAreActuallyUsed() {
         val window = source("src/main/java/$modulePath/BubblePreviewWindow.kt")
         listOf(
-            "R.drawable.bf_bubble_user_body",
-            "R.drawable.bf_bubble_character_body",
-            "R.drawable.bf_bubble_chip",
-            "R.drawable.bf_bubble_tail_down",
-            "R.drawable.bf_bubble_tail_up",
-            "R.drawable.bf_bubble_tail_left",
-            "R.drawable.bf_bubble_tail_right",
-            "R.drawable.bf_bubble_ic_error",
-            "R.drawable.bf_bubble_ic_stop",
-            "R.drawable.bf_bubble_ic_record",
-            "R.drawable.bf_bubble_ic_close",
-            "R.drawable.bf_bubble_dots",
-            "R.drawable.bf_bubble_ellipsis_static",
-            "R.anim.bf_bubble_enter",
-            "R.anim.bf_bubble_exit",
-            "R.anim.bf_bubble_crossfade",
+            "R.drawable.bf_speech_input_body",
+            "R.drawable.bf_speech_reply_body",
+            "R.drawable.bf_speech_user_chip",
+            "R.drawable.bf_speech_tail_down",
+            "R.drawable.bf_speech_tail_up",
+            "R.drawable.bf_speech_tail_left",
+            "R.drawable.bf_speech_tail_right",
+            "R.drawable.bf_speech_ic_error",
+            "R.drawable.bf_speech_ic_stop",
+            "R.drawable.bf_speech_ic_expand",
+            "R.drawable.bf_speech_ic_close",
+            "R.drawable.bf_speech_dots",
+            "R.drawable.bf_speech_ellipsis_static",
+            "R.anim.bf_speech_enter",
+            "R.anim.bf_speech_exit",
         ).forEach { resource ->
             assertTrue("$resource must be wired, not merely imported", window.contains(resource))
         }
-        assertTrue(window.contains("BubblePreviewTailGeometry.resolve("))
-        assertTrue(window.contains("palette.usesPackCharacterColors"))
+        assertTrue(window.contains("BubbleTailView("))
+        assertTrue(window.contains("usePackReply"))
         assertTrue(window.contains("GradientDrawable"))
 
         val controller = source("src/main/java/$modulePath/BubblePreviewController.kt")
@@ -104,7 +103,7 @@ class BubblePreviewStageDContractTest {
     fun userCloseUsesBoundedExitButInvalidationStillRemovesImmediately() {
         val window = source("src/main/java/$modulePath/BubblePreviewWindow.kt")
         val close = methodBody(window, "    private fun requestUserClose()")
-        assertTrue(close.contains("R.anim.bf_bubble_exit"))
+        assertTrue(close.contains("R.anim.bf_speech_exit"))
         assertTrue(close.contains("EXIT_ANIMATION_MILLIS"))
         assertTrue(close.contains("catch (error: Exception)"))
         assertEquals(80L, Regex("EXIT_ANIMATION_MILLIS = (\\d+)L")
@@ -244,26 +243,34 @@ class BubblePreviewStageDContractTest {
         assertTrue(controller.contains("measuredActionWidths: Map<BubblePreviewAction, Float> by lazy"))
         assertTrue(controller.contains("measuredBodyLinePx: Float by lazy"))
         assertTrue(controller.contains("measuredNameLinePx: Float by lazy"))
-        val compute = methodBody(controller, "    private fun computePlacement(")
-        assertTrue(compute.contains("val measured = measuredActionWidths"))
+        val compute = methodBody(controller, "    private fun computeReplyPlacement(")
+        assertTrue(compute.contains("measuredBodyLinePx"))
+        assertTrue(compute.contains("measuredNameLinePx"))
         assertFalse(compute.contains("measureActionTextWidths()"))
         assertFalse(compute.contains("measureBodyLinePx()"))
         assertFalse(compute.contains("measureNameLinePx()"))
     }
 
     @Test
-    fun tailPlanReservesButtonsBeforeRoundingAndKeepsTailInsideTheWindow() {
+    fun tailAndActionPlanReserveTheirOwnSpaceInsideTheCompactWindow() {
         val window = source("src/main/java/$modulePath/BubblePreviewWindow.kt")
-        val layout = methodBody(window, "    private fun applyColumnLayout(")
-        assertTrue(layout.contains("floor") || layout.contains("ceil"))
-        assertTrue(layout.contains("plan.actionRowPx"))
-        assertTrue(layout.contains("characterHeight - fixed"))
-        assertTrue(layout.contains("candidateBody"))
-        assertTrue(layout.contains("leftReserve"))
-        assertTrue(layout.contains("bottomReserve"))
-        val resolve = methodBody(window, "    private fun resolveTail(")
-        assertTrue(resolve.contains("rootLeft < -0.5f"))
-        assertTrue(resolve.contains("plan.windowWidthPx + 0.5f"))
-        assertTrue(resolve.contains("plan.windowHeightPx + 0.5f"))
+        val body = methodBody(window, "    private fun bodyRect(")
+        assertTrue(body.contains("plan.actionRowPx"))
+        assertTrue(body.contains("plan.chipHeightPx"))
+        assertTrue(body.contains("tailShort"))
+        assertTrue(body.contains("BubblePreviewSide.ABOVE"))
+        assertTrue(body.contains("BubblePreviewSide.BELOW"))
+        assertTrue(body.contains("BubblePreviewSide.LEFT"))
+        assertTrue(body.contains("BubblePreviewSide.RIGHT"))
+        val tail = methodBody(window, "    private fun addTailView(")
+        assertTrue(tail.contains("body.bottom - dp(1)"))
+        assertTrue(tail.contains("body.top - height + dp(1)"))
+        assertTrue(tail.contains("body.left - width + dp(1)"))
+        assertTrue(tail.contains("body.right - dp(1)"))
+        assertTrue(tail.contains("bodyCenterX"))
+        val actions = methodBody(window, "    private fun buildReplyFace(")
+        assertTrue(actions.contains("bf_speech_ic_stop"))
+        assertTrue(actions.contains("bf_speech_ic_close"))
+        assertTrue(actions.contains("touchPx()"))
     }
 }

@@ -275,15 +275,19 @@ class BubblePreviewFinalAuditTest {
     }
 
     @Test
-    fun tailAdapterUsesAppliedWindowOriginAndAFreshAnchor() {
+    fun tailAdapterUsesTheBodyRectangleAndAFreshAnchor() {
         val window = source("src/main/java/com/wwkhub/bluefin/bubblepreview/BubblePreviewWindow.kt")
-        val resolve = methodBody(window, "    private fun resolveTail(")
-        assertTrue(resolve.contains("displayLeft + appliedX"))
-        assertTrue(resolve.contains("displayTop + appliedY"))
+        val body = methodBody(window, "    private fun bodyRect(")
+        assertTrue(body.contains("tailShort"))
+        assertTrue(body.contains("plan.chipHeightPx"))
+        val tail = methodBody(window, "    private fun addTailView(")
+        assertTrue(tail.contains("val body = bodyRect()"))
+        assertTrue(tail.contains("bodyCenterX"))
+        assertTrue(tail.contains("body.bottom - dp(1)"))
         val placement = methodBody(window, "    fun updatePlacement(")
         assertTrue(placement.contains("sideChanged || anchorChanged"))
         assertTrue(placement.contains("layoutVisual(animate = false)"))
-        assertEquals(1, Regex("updateViewLayout\\(").findAll(placement).count())
+        assertTrue(placement.contains("updateWindow()"))
 
         val controller = source(
             "src/main/java/com/wwkhub/bluefin/bubblepreview/BubblePreviewController.kt",
@@ -298,9 +302,8 @@ class BubblePreviewFinalAuditTest {
     fun childAnimationResourcesAreReachedOnlyBehindTheAnimationGate() {
         val window = source("src/main/java/com/wwkhub/bluefin/bubblepreview/BubblePreviewWindow.kt")
         listOf(
-            "R.anim.bf_bubble_enter",
-            "R.anim.bf_bubble_crossfade",
-            "R.anim.bf_bubble_exit",
+            "R.anim.bf_speech_enter",
+            "R.anim.bf_speech_exit",
         ).forEach { resource ->
             val resourceIndex = window.indexOf(resource)
             assertTrue("missing $resource", resourceIndex >= 0)

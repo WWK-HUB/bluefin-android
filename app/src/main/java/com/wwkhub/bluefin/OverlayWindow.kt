@@ -177,6 +177,9 @@ internal class OverlayWindow(
     private var bubbleAppVisibilityInstalled = false
     private var bubbleAppVisibilityListener: OverlayAppVisibility.Listener? = null
     private var bubbleDraftWatcherInstalled = false
+    private var bubbleInputToken = 0L
+    private var bubbleInputPending = false
+    private var bubbleInputDeadline: Runnable? = null
     private var applyingDraft = false
     private var panelInsetsInstalled = false
     private var panelInsetsListener: android.view.ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -272,6 +275,9 @@ internal class OverlayWindow(
             // unresolved orphan reference for the caller. Only the optional
             // Exception is contained; the host's own cleanup exceptions are not.
             cancelBubbleFirstAttach()
+            cancelSpeechInputDeadline()
+            bubbleInputPending = false
+            bubbleInputToken = 0L
             detachBubbleChatListener()
             cancelBubbleInsetsEpoch()
             removeBubbleHostListeners()
@@ -331,6 +337,8 @@ internal class OverlayWindow(
         clickThrough = enabled
         if (enabled) {
             dropHitWindow()
+            bubbleInputPending = false
+            cancelSpeechInputDeadline()
             bubblePreview?.let { runBubbleHostCallback("click-through") { it.onClickThroughEnabled() } }
         } else if (changed && pageReady) {
             // Ask the page to publish now so poking works again immediately
@@ -661,7 +669,7 @@ internal class OverlayWindow(
 
     private fun addOrbPanelListeners() {
         orbPanel.findViewById<View>(R.id.overlay_open_chat).setOnClickListener {
-            openChatPanel()
+            openSpeechEntry()
         }
         orbPanel.findViewById<View>(R.id.overlay_change_character).setOnClickListener {
             collapseOrb()
@@ -952,6 +960,253 @@ internal class OverlayWindow(
         if (forceRestore) updateSendState()
         handler.post { applyChatPanelInsets() }
         Log.i(TAG, "orb chat expanded input=$requestInput")
+    }
+
+    /**
+     * The orb "对话" path. An eligible click creates the single speech input
+     * balloon lazily after this user gesture; unconfigured, click-through,
+     * switch-off and circuit paths keep the existing record panel.
+     */
+    private fun openSpeechEntry() {
+        if (!ModelEndpointStore.isReady(appContext)) {
+            showOrbUnconfiguredPrompt()
+            return
+        }
+        if (clickThrough) {
+            openChatPanel(requestInput = false)
+            Toast.makeText(
+                appContext,
+                R.string.speech_click_through_fallback,
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        val circuit = try {
+            BubblePreviewExplicitChatEntry.failureCircuitOrNull()
+        } catch (error: Exception) {
+            Log.w(TAG, "speech entry circuit contained type=${error.javaClass.name}")
+            null
+        }
+        if (!BubblePreviewModule.isEnabled() ||
+            !BluefinStore.readBubblePreview(prefs()) ||
+            circuit == null || circuit.isTripped()
+        ) {
+            openChatPanel(requestInput = false)
+            return
+        }
+        collapseOrb()
+        scheduleSpeechInputAfterEntry()
+    }
+
+    /**
+     * Same isolation pattern as scheduleBubblePreviewAfterStarted: post first,
+     * then recheck attached/pageReady/pref/circuit/click-through before any
+     * controller, window, EditText or keyboard exists.
+     */
+    private fun scheduleSpeechInputAfterEntry() {
+        val token = ++bubbleRequestToken
+        bubbleInputToken = token
+        bubbleInputPending = true
+        bubbleSignalToken = token
+        bubbleAwaitingAttachToken = token
+        handler.post {
+            if (token != bubbleRequestToken || destroyed) return@post
+            var attempt: BubblePreviewDisplayAttempt? = null
+            try {
+                if (!attached || !pageReady) {
+                    fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+                    return@post
+                }
+                if (OverlayAppVisibility.foreground) {
+                    fallbackSpeechToRecord(null)
+                    return@post
+                }
+                if (!BubblePreviewModule.isEnabled() ||
+                    !BluefinStore.readBubblePreview(prefs())
+                ) {
+                    fallbackSpeechToRecord(null)
+                    return@post
+                }
+                if (clickThrough || petHiddenForBubble || petOpacityForBubble <= 0f) {
+                    fallbackSpeechToRecord(null)
+                    return@post
+                }
+                val circuit = BubblePreviewExplicitChatEntry.failureCircuitOrNull()
+                    ?: run {
+                        fallbackSpeechToRecord(null)
+                        return@post
+                    }
+                if (circuit.isTripped()) {
+                    fallbackSpeechToRecord(null)
+                    return@post
+                }
+                if (!Settings.canDrawOverlays(appContext)) {
+                    fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+                    return@post
+                }
+                attempt = circuit.beginDisplayAttempt(nowMillis())
+                if (attempt == null) {
+                    fallbackSpeechToRecord(null)
+                    return@post
+                }
+                bubbleDisplayAttempt = attempt
+                detachBubbleChatListener()
+                val controller = try {
+                    bubblePreview ?: BubblePreviewController(
+                        context = uiContext,
+                        windowManager = windowManager,
+                        hostGeneration = ++bubbleHostGeneration,
+                        circuit = circuit,
+                        prefs = prefs(),
+                        characterScale = OverlayPetPolicy.scaleFor(BluefinStore.readScale(prefs())),
+                        characterName = currentCharacterName(),
+                        actions = bubbleHostActions(),
+                    ).also { bubblePreview = it }
+                } catch (error: Exception) {
+                    attempt.recordFailure(nowMillis())
+                    bubbleDisplayAttempt = null
+                    throw error
+                }
+                installBubbleInsetsCallbacks()
+                installPanelInsetsHandler()
+                installBubbleAppVisibility()
+                controller.onHostVisibilityChanged(
+                    petHiddenForBubble,
+                    petOpacityForBubble,
+                )
+                val accepted = controller.showInput(
+                    token = token,
+                    draftText = ChatDraft.state.rebind().text,
+                    acceptedRoleName = currentCharacterName(),
+                    packColors = currentManifest?.bubble,
+                    attemptToken = attempt,
+                )
+                if (!accepted) {
+                    attempt.recordFailure(nowMillis())
+                    bubbleDisplayAttempt = null
+                    throw IllegalStateException("speech input not accepted")
+                }
+                scheduleSpeechInputDeadline(token)
+            } catch (error: Exception) {
+                Log.w(TAG, "speech input unavailable type=${error.javaClass.name}")
+                attempt?.recordFailure(nowMillis())
+                bubbleDisplayAttempt = null
+                abortBubblePreviewRound()
+                fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+            }
+        }
+    }
+
+    private fun scheduleSpeechInputDeadline(token: Long) {
+        cancelSpeechInputDeadline()
+        val runnable = Runnable {
+            bubbleInputDeadline = null
+            if (token != bubbleRequestToken || destroyed) return@Runnable
+            if (bubbleInputToken == token && bubbleInputPending) {
+                bubbleInputPending = false
+                abortBubblePreviewRound()
+                fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+            }
+        }
+        bubbleInputDeadline = runnable
+        handler.postDelayed(runnable, SPEECH_INPUT_DEADLINE_MS)
+    }
+
+    private fun cancelSpeechInputDeadline() {
+        bubbleInputDeadline?.let { handler.removeCallbacks(it) }
+        bubbleInputDeadline = null
+    }
+
+    private fun fallbackSpeechToRecord(message: Int?) {
+        cancelSpeechInputDeadline()
+        bubbleInputPending = false
+        bubbleInputToken = 0L
+        bubbleAwaitingAttachToken = null
+        if (bubbleSignalToken != null && bubblePreview != null) {
+            dismissBubblePreview()
+        } else {
+            bubbleSignalToken = null
+        }
+        bubbleDisplayAttempt = null
+        if (destroyed || !attached) return
+        if (message != null) {
+            Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+        }
+        try {
+            openChatPanel(requestInput = false, dismissBubble = true)
+        } catch (error: Exception) {
+            Log.w(TAG, "speech fallback panel contained type=${error.javaClass.name}")
+        }
+    }
+
+    /**
+     * STARTED from the head-top input. The same accepted session/round is
+     * transferred to the reply face; EMPTY keeps the input, BUSY never stops or
+     * interrupts the current reply.
+     */
+    private fun sendSpeechInput(text: String) {
+        if (destroyed || !attached) return
+        val session = chatSession ?: ChatSession.shared(appContext).also { chatSession = it }
+        if (text.isBlank()) {
+            bubblePreview?.keepInput()
+            return
+        }
+        ChatDraft.state.edit(text)
+        val capture = ChatDraft.state.captureSend()
+        val outcome = when (session.send(text)) {
+            ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
+            ChatSendResult.EMPTY -> ChatDraftSendOutcome.EMPTY
+            ChatSendResult.BUSY -> ChatDraftSendOutcome.BUSY
+            ChatSendResult.NOT_CONFIGURED -> ChatDraftSendOutcome.NOT_CONFIGURED
+        }
+        val latest = ChatDraft.state.onSendOutcome(capture, outcome)
+        when (outcome) {
+            ChatDraftSendOutcome.STARTED -> {
+                val snapshot = session.snapshot()
+                val replyToken = ++bubbleRequestToken
+                bubbleSignalToken = replyToken
+                bubbleSignalGeneration = snapshot.requestGeneration
+                bubbleSignalUserIndex = snapshot.lines.lastIndex
+                bubbleInputToken = 0L
+                bubbleInputPending = false
+                bubbleAwaitingAttachToken = null
+                cancelSpeechInputDeadline()
+                val accepted = try {
+                    bubblePreview?.beginReplyFromInput(
+                        token = replyToken,
+                        userSummary = bubbleSummary(text),
+                        acceptedRoleName = currentCharacterName(),
+                        acceptedRequestGeneration = snapshot.requestGeneration,
+                        packColors = currentManifest?.bubble,
+                    ) == true
+                } catch (error: Exception) {
+                    Log.w(TAG, "speech reply switch contained type=${error.javaClass.name}")
+                    false
+                }
+                if (!accepted) {
+                    fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+                    return
+                }
+                attachBubbleChatListener(session)
+                try {
+                    deliverBubbleSignal(replyToken, bubbleSignalPayload(snapshot))
+                } catch (error: Exception) {
+                    Log.w(TAG, "speech reply catch-up contained type=${error.javaClass.name}")
+                }
+            }
+            ChatDraftSendOutcome.EMPTY -> bubblePreview?.keepInput()
+            ChatDraftSendOutcome.BUSY -> {
+                Toast.makeText(
+                    appContext,
+                    R.string.speech_busy_fallback,
+                    Toast.LENGTH_SHORT,
+                ).show()
+                bubblePreview?.keepInput()
+            }
+            ChatDraftSendOutcome.NOT_CONFIGURED -> {
+                openChatPanel(requestInput = false)
+            }
+        }
     }
 
     private fun showOrbUnconfiguredPrompt() {
@@ -1550,6 +1805,7 @@ internal class OverlayWindow(
                 // collapsed to one count.
                 val attempt = circuit.beginDisplayAttempt(nowMillis()) ?: return@post
                 bubbleDisplayAttempt = attempt
+                detachBubbleChatListener()
                 val controller = try {
                     bubblePreview ?: BubblePreviewController(
                         context = uiContext,
@@ -1623,7 +1879,10 @@ internal class OverlayWindow(
                 ) {
                     cancelBubbleFirstAttach()
                     bubbleAwaitingAttachToken = null
+                    bubbleInputPending = false
+                    cancelSpeechInputDeadline()
                     if (orbExpanded || chatExpanded) collapseOrb()
+                    bubblePreview?.focusInput()
                 }
             }
 
@@ -1640,7 +1899,11 @@ internal class OverlayWindow(
                 ) {
                     val awaiting = bubbleAwaitingAttachToken
                     bubbleAwaitingAttachToken = null
-                    if (awaiting != null && awaiting == bubbleRequestToken) {
+                    if (bubblePreview?.isInputMode() == true) {
+                        bubbleInputPending = false
+                        cancelSpeechInputDeadline()
+                        fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+                    } else if (awaiting != null && awaiting == bubbleRequestToken) {
                         finishBubbleFirstAttach(awaiting, restore = true)
                     } else {
                         detachBubbleChatListener()
@@ -1662,7 +1925,11 @@ internal class OverlayWindow(
                 ) {
                     val awaiting = bubbleAwaitingAttachToken
                     bubbleAwaitingAttachToken = null
-                    if (awaiting != null && awaiting == bubbleRequestToken) {
+                    if (bubblePreview?.isInputMode() == true) {
+                        bubbleInputPending = false
+                        cancelSpeechInputDeadline()
+                        fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
+                    } else if (awaiting != null && awaiting == bubbleRequestToken) {
                         finishBubbleFirstAttach(awaiting, restore = true)
                     }
                 }
@@ -1676,7 +1943,51 @@ internal class OverlayWindow(
                     if (bubbleSignalToken == token) bubbleSignalToken = null
                     if (bubbleFirstAttachToken == token) cancelBubbleFirstAttach()
                     if (bubbleAwaitingAttachToken == token) bubbleAwaitingAttachToken = null
+                    if (bubbleInputToken == token) {
+                        bubbleInputToken = 0L
+                        bubbleInputPending = false
+                        cancelSpeechInputDeadline()
+                    }
                     detachBubbleChatListener()
+                }
+            }
+
+            override fun onBubbleInputSendRequested(text: String) {
+                postBubbleCallback(
+                    "input-send",
+                    bubbleInputToken.takeIf { it != 0L } ?: bubbleSignalToken,
+                ) {
+                    sendSpeechInput(text)
+                }
+            }
+
+            override fun onBubbleInputExpandRequested(text: String) {
+                postBubbleCallback(
+                    "input-expand",
+                    bubbleInputToken.takeIf { it != 0L } ?: bubbleSignalToken,
+                ) {
+                    ChatDraft.state.edit(text)
+                    bubbleInputPending = false
+                    cancelSpeechInputDeadline()
+                    dismissBubblePreview()
+                    if (!destroyed && attached) {
+                        openChatPanel(requestInput = false, dismissBubble = false)
+                    }
+                }
+            }
+
+            override fun onBubbleInputDraftChanged(text: String) {
+                ChatDraft.state.edit(text)
+            }
+
+            override fun onBubbleInputNoSpace() {
+                postBubbleCallback(
+                    "input-no-space",
+                    bubbleInputToken.takeIf { it != 0L } ?: bubbleSignalToken,
+                ) {
+                    bubbleInputPending = false
+                    cancelSpeechInputDeadline()
+                    fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
                 }
             }
         }
@@ -2001,6 +2312,9 @@ internal class OverlayWindow(
     private fun dismissBubblePreview() {
         bubbleRequestToken += 1
         cancelBubbleFirstAttach()
+        cancelSpeechInputDeadline()
+        bubbleInputToken = 0L
+        bubbleInputPending = false
         bubbleSignalToken = null
         bubbleAwaitingAttachToken = null
         detachBubbleChatListener()
@@ -2018,6 +2332,9 @@ internal class OverlayWindow(
      */
     private fun abortBubblePreviewRound() {
         cancelBubbleFirstAttach()
+        cancelSpeechInputDeadline()
+        bubbleInputPending = false
+        bubbleInputToken = 0L
         bubbleSignalToken = null
         bubbleAwaitingAttachToken = null
         detachBubbleChatListener()
@@ -2109,7 +2426,7 @@ internal class OverlayWindow(
                     // coalesced epoch only batches subsequent callbacks.
                     invalidateBubbleScreenSnapshot()
                     bubblePreview?.let { controller ->
-                        runBubbleHostCallback("insets") { controller.onHostConfigurationChanged() }
+                        runBubbleHostCallback("insets") { controller.onHostInsetsChanged() }
                     }
                     scheduleBubbleInsetsEpoch()
                 }
@@ -2740,6 +3057,7 @@ internal class OverlayWindow(
         const val BRIDGE_NAME = "BluefinNative"
         const val OVERLAY_BRIDGE = "BluefinOverlay"
         const val FIRST_ATTACH_DEADLINE_MS = 2500L
+        const val SPEECH_INPUT_DEADLINE_MS = 2500L
         const val INSETS_EPOCH_COALESCE_MS = 100L
 
         fun createUiContext(app: Context): Context {

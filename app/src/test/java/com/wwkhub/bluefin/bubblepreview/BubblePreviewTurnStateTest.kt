@@ -51,7 +51,7 @@ class BubblePreviewTurnStateTest {
     }
 
     @Test
-    fun completionStartsHoldAtVisualCatchUpThenCollapsesAndHidesAtExactBoundaries() {
+    fun completionHoldsEightSecondsThenReplyFadesWhileTheUserChipLingersOneSecond() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
         state.onSnapshot(1L, "hello", isTerminal = true, nowMillis = 0L)
@@ -62,13 +62,19 @@ class BubblePreviewTurnStateTest {
         assertEquals("hello", hold.visibleText)
 
         assertEquals(BubbleVisibleState.HOLD, state.onTick(1L, holdAt + 7_999L).visibleState)
-        val collapsed = state.onTick(1L, holdAt + 8_000L)
-        assertEquals(BubbleVisibleState.COLLAPSED, collapsed.visibleState)
-        assertEquals("hello", collapsed.visibleText)
-        assertEquals(BubbleTurnPhase.COMPLETE, collapsed.phase)
+        val linger = state.onTick(1L, holdAt + 8_000L)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, linger.visibleState)
+        assertEquals("hello", linger.visibleText)
+        assertEquals(BubbleTurnPhase.COMPLETE, linger.phase)
 
-        assertEquals(BubbleVisibleState.COLLAPSED, state.onTick(1L, holdAt + 37_999L).visibleState)
-        val hidden = state.onTick(1L, holdAt + 38_000L)
+        assertEquals(
+            BubbleVisibleState.CHIP_LINGER,
+            state.onTick(1L, holdAt + 8_000L + 999L).visibleState,
+        )
+        val hidden = state.onTick(
+            1L,
+            holdAt + 8_000L + BubblePreviewTurnState.CHIP_LINGER_MILLIS,
+        )
         assertEquals(BubbleVisibleState.HIDDEN, hidden.visibleState)
         assertTrue(hidden.suppressed)
         assertEquals(BubbleSuppressionReason.TIMEOUT, hidden.suppressionReason)
@@ -88,7 +94,7 @@ class BubblePreviewTurnStateTest {
         assertFalse(repeated.textChanged)
 
         assertEquals(BubbleVisibleState.HOLD, state.onTick(1L, holdAt + 7_999L).visibleState)
-        assertEquals(BubbleVisibleState.COLLAPSED, state.onTick(1L, holdAt + 8_000L).visibleState)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, state.onTick(1L, holdAt + 8_000L).visibleState)
     }
 
     @Test
@@ -106,8 +112,8 @@ class BubblePreviewTurnStateTest {
         assertFalse(stopped.hasMore)
 
         assertEquals(BubbleVisibleState.HOLD, state.onTick(1L, 8_099L).visibleState)
-        assertEquals(BubbleVisibleState.COLLAPSED, state.onTick(1L, 8_100L).visibleState)
-        assertEquals(BubbleVisibleState.HIDDEN, state.onTick(1L, 38_100L).visibleState)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, state.onTick(1L, 8_100L).visibleState)
+        assertEquals(BubbleVisibleState.HIDDEN, state.onTick(1L, 9_100L).visibleState)
     }
 
     @Test
@@ -123,7 +129,7 @@ class BubblePreviewTurnStateTest {
     }
 
     @Test
-    fun errorFlushesPartialTextThenShowsFailureChipAndHidesAtBoundaries() {
+    fun errorFlushesPartialTextThenFadesTheReplyAndLingersTheChip() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
         state.onSnapshot(1L, "\u5DF2\u6536\u5230", isTerminal = false, nowMillis = 0L)
@@ -133,15 +139,16 @@ class BubblePreviewTurnStateTest {
         assertEquals(BubbleTurnStatus.FAILED, error.status)
         assertEquals(BubbleVisibleState.ERROR, error.visibleState)
         assertEquals("\u5DF2\u6536\u5230", error.visibleText)
-        assertFalse(error.isFailureChip)
 
         assertEquals(BubbleVisibleState.ERROR, state.onTick(1L, 8_099L).visibleState)
-        val chip = state.onTick(1L, 8_100L)
-        assertEquals(BubbleVisibleState.COLLAPSED, chip.visibleState)
-        assertTrue(chip.isFailureChip)
-        assertEquals("\u5DF2\u6536\u5230", chip.visibleText)
-        assertEquals(BubbleSuppressionReason.TIMEOUT, state.onTick(1L, 38_100L).suppressionReason)
-        assertEquals(BubbleVisibleState.HIDDEN, state.onTick(1L, 38_100L).visibleState)
+        val linger = state.onTick(1L, 8_100L)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, linger.visibleState)
+        assertEquals("\u5DF2\u6536\u5230", linger.visibleText)
+        assertEquals(
+            BubbleSuppressionReason.TIMEOUT,
+            state.onTick(1L, 9_100L).suppressionReason,
+        )
+        assertEquals(BubbleVisibleState.HIDDEN, state.onTick(1L, 9_100L).visibleState)
     }
 
     @Test
@@ -154,26 +161,6 @@ class BubblePreviewTurnStateTest {
         assertEquals(BubbleTurnStatus.FAILED, stop.status)
         assertEquals(BubbleVisibleState.ERROR, stop.visibleState)
         assertEquals("partial", stop.visibleText)
-    }
-
-    @Test
-    fun collapsedClickExpandsCachedTextWithFreshHoldAndNoReplay() {
-        val state = BubblePreviewTurnState()
-        state.beginTurn(1L, "我", "蓝鳍", 0L)
-        state.onSnapshot(1L, "cached reply", isTerminal = true, nowMillis = 0L)
-        val (holdAt, hold) = tickUntilHold(state, 1L)
-        val collapsed = state.onTick(1L, holdAt + 8_000L)
-        assertEquals(BubbleVisibleState.COLLAPSED, collapsed.visibleState)
-
-        val clickAt = holdAt + 20_000L
-        val expanded = state.onCollapsedClick(1L, clickAt)
-        assertEquals(BubbleVisibleState.HOLD, expanded.visibleState)
-        assertEquals(hold.visibleText, expanded.visibleText)
-        assertEquals(expanded.targetGraphemes, expanded.visibleGraphemes)
-        assertFalse(expanded.textChanged)
-
-        assertEquals(BubbleVisibleState.HOLD, state.onTick(1L, clickAt + 7_999L).visibleState)
-        assertEquals(BubbleVisibleState.COLLAPSED, state.onTick(1L, clickAt + 8_000L).visibleState)
     }
 
     @Test
@@ -220,28 +207,6 @@ class BubblePreviewTurnStateTest {
     }
 
     @Test
-    fun sameTextWithNewTokenStartsFreshAndDoesNotReplayCachedText() {
-        val state = BubblePreviewTurnState()
-        state.beginTurn(1L, "same summary", "same role", 0L)
-        state.onSnapshot(1L, "same text", isTerminal = true, nowMillis = 0L)
-        val (holdAt, _) = tickUntilHold(state, 1L)
-        state.onTick(1L, holdAt + 8_000L)
-
-        val fresh = state.beginTurn(2L, "same summary", "same role", holdAt + 20_000L)
-        assertEquals(BubbleVisibleState.THINKING, fresh.visibleState)
-        assertEquals("", fresh.visibleText)
-
-        val terminal = state.onSnapshot(2L, "same text", isTerminal = true, nowMillis = holdAt + 20_000L)
-        assertEquals("", terminal.visibleText)
-        assertEquals(BubbleVisibleState.TYPING, terminal.visibleState)
-        assertEquals(0, terminal.visibleGraphemes)
-
-        val next = state.onTick(2L, holdAt + 20_033L)
-        assertEquals(1, next.visibleGraphemes)
-        assertFalse(next.visibleText == "same text")
-    }
-
-    @Test
     fun longReplyIsCappedAt240RetainedClustersWithoutKeepingTheWholeSnapshot() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
@@ -282,18 +247,18 @@ class BubblePreviewTurnStateTest {
         val resumedAgain = state.setGeometryAvailable(true, holdAt + 6_000L)
         assertEquals(BubbleVisibleState.HOLD, resumedAgain.visibleState)
         assertEquals(BubbleVisibleState.HOLD, state.onTick(1L, holdAt + 7_999L).visibleState)
-        assertEquals(BubbleVisibleState.COLLAPSED, state.onTick(1L, holdAt + 8_000L).visibleState)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, state.onTick(1L, holdAt + 8_000L).visibleState)
     }
 
     @Test
-    fun geometrySuspensionDoesNotReviveACollapseDeadlineAlreadyElapsed() {
+    fun geometrySuspensionDoesNotReviveALingerDeadlineAlreadyElapsed() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
         state.onSnapshot(1L, "hello", isTerminal = true, nowMillis = 0L)
         val (holdAt, _) = tickUntilHold(state, 1L)
 
         state.setGeometryAvailable(false, holdAt + 1_000L)
-        val reopened = state.setGeometryAvailable(true, holdAt + 38_000L)
+        val reopened = state.setGeometryAvailable(true, holdAt + 9_000L)
 
         assertEquals(BubbleVisibleState.HIDDEN, reopened.visibleState)
         assertTrue(reopened.suppressed)
@@ -317,13 +282,12 @@ class BubblePreviewTurnStateTest {
     }
 
     @Test
-    fun nextDeadlineExposesOnlyTheAbsoluteHoldAndChipBoundaries() {
+    fun nextDeadlineExposesTheHoldThenLingerBoundariesAndNoChipPhase() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
         assertNull(state.nextDeadlineMillis(0L))
 
         state.onSnapshot(1L, "hello", isTerminal = true, nowMillis = 0L)
-        // Still typing the finite preview: backlog owns the 33 ms ticker.
         assertNull(state.nextDeadlineMillis(0L))
 
         val (holdAt, hold) = tickUntilHold(state, 1L)
@@ -332,28 +296,24 @@ class BubblePreviewTurnStateTest {
             holdAt + BubblePreviewTurnState.HOLD_MILLIS,
             state.nextDeadlineMillis(holdAt),
         )
-        assertEquals(
-            holdAt + BubblePreviewTurnState.HOLD_MILLIS,
-            state.nextDeadlineMillis(holdAt - 1L),
-        )
 
-        val collapsed = state.onTick(1L, holdAt + 8_000L)
-        assertEquals(BubbleVisibleState.COLLAPSED, collapsed.visibleState)
+        val linger = state.onTick(1L, holdAt + 8_000L)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, linger.visibleState)
         assertEquals(
-            holdAt + 8_000L + BubblePreviewTurnState.COLLAPSED_MILLIS,
+            holdAt + 8_000L + BubblePreviewTurnState.CHIP_LINGER_MILLIS,
             state.nextDeadlineMillis(holdAt + 8_000L),
         )
 
         val hidden = state.onTick(
             1L,
-            holdAt + 8_000L + BubblePreviewTurnState.COLLAPSED_MILLIS,
+            holdAt + 8_000L + BubblePreviewTurnState.CHIP_LINGER_MILLIS,
         )
         assertEquals(BubbleVisibleState.HIDDEN, hidden.visibleState)
-        assertNull(state.nextDeadlineMillis(holdAt + 38_000L))
+        assertNull(state.nextDeadlineMillis(holdAt + 9_000L))
     }
 
     @Test
-    fun failureChipDeadlineIsTheOnlyRemainingDeadlineAfterTheErrorWindow() {
+    fun errorDeadlineIsTheErrorWindowThenTheLingerWindow() {
         val state = BubblePreviewTurnState()
         state.beginTurn(1L, "我", "蓝鳍", 0L)
         state.onError(1L, "partial", nowMillis = 0L)
@@ -361,11 +321,10 @@ class BubblePreviewTurnStateTest {
             BubblePreviewTurnState.ERROR_MILLIS,
             state.nextDeadlineMillis(0L),
         )
-        val chip = state.onTick(1L, BubblePreviewTurnState.ERROR_MILLIS)
-        assertEquals(BubbleVisibleState.COLLAPSED, chip.visibleState)
-        assertTrue(chip.isFailureChip)
+        val linger = state.onTick(1L, BubblePreviewTurnState.ERROR_MILLIS)
+        assertEquals(BubbleVisibleState.CHIP_LINGER, linger.visibleState)
         assertEquals(
-            BubblePreviewTurnState.ERROR_MILLIS + BubblePreviewTurnState.FAILURE_CHIP_MILLIS,
+            BubblePreviewTurnState.ERROR_MILLIS + BubblePreviewTurnState.CHIP_LINGER_MILLIS,
             state.nextDeadlineMillis(BubblePreviewTurnState.ERROR_MILLIS),
         )
     }

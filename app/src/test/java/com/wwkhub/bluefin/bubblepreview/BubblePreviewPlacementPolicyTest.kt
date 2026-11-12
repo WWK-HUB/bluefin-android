@@ -67,11 +67,11 @@ class BubblePreviewPlacementPolicyTest {
     }
 
     @Test
-    fun fallsBackBelowWhenThereIsNoRoomAbove() {
+    fun fallsBackToTheSideFacingTheScreenCentreBeforeBelow() {
         val highCharacter = BubblePreviewRect(400, 220, 600, 600)
         val decision = place(characterBounds = highCharacter)
-        assertEquals(BubblePreviewSide.BELOW, decision.placement!!.side)
-        assertTrue(decision.placement.rect.top >= highCharacter.bottom + 6)
+        assertEquals(BubblePreviewSide.LEFT, decision.placement!!.side)
+        assertTrue(decision.placement.rect.right <= highCharacter.left - 6)
     }
 
     @Test

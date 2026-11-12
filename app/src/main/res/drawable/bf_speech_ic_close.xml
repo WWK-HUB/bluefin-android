@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp"
+    android:height="18dp"
+    android:viewportWidth="18"
+    android:viewportHeight="18">
+    <path
+        android:name="close_x"
+        android:pathData="M4.5,4.5 L13.5,13.5 M13.5,4.5 L4.5,13.5"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_speech_icon_on_balloon"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
+</vector>

@@ -3,8 +3,14 @@ package com.wwkhub.bluefin.bubblepreview
 /** Lifecycle of the single overlay turn, independent of Android ChatSession. */
 enum class BubbleTurnPhase { THINKING, STREAMING, COMPLETE, STOPPED, FAILED }
 
-/** What the desktop window should draw now. */
-enum class BubbleVisibleState { THINKING, TYPING, HOLD, COLLAPSED, ERROR, HIDDEN }
+/**
+ * What the single desktop speech window draws now.
+ *
+ * 0.8 deliberately has no collapsed preview chip: a completed or stopped reply
+ * stays as the 口白 during HOLD, then the reply bubble fades first and the user
+ * chip lingers for about one second (`CHIP_LINGER`) before HIDDEN.
+ */
+enum class BubbleVisibleState { THINKING, TYPING, HOLD, CHIP_LINGER, ERROR, HIDDEN }
 
 /** Permanent suppression reasons; all invalidate only the current token. */
 enum class BubbleSuppressionReason {
@@ -36,8 +42,6 @@ data class BubbleTurnSnapshot(
     val isTerminal: Boolean
         get() = phase == BubbleTurnPhase.COMPLETE ||
             phase == BubbleTurnPhase.STOPPED || phase == BubbleTurnPhase.FAILED
-    val isFailureChip: Boolean
-        get() = phase == BubbleTurnPhase.FAILED && visibleState == BubbleVisibleState.COLLAPSED
     val retainedReplyGraphemes: Int
         get() = targetGraphemes + if (pendingGrapheme) 1 else 0
 }
@@ -62,9 +66,8 @@ class BubblePreviewTurnState {
     private var suppressionReason: BubbleSuppressionReason? = null
     private var geometrySuspended = false
     private var holdUntil = -1L
-    private var collapsedUntil = -1L
+    private var lingerUntil = -1L
     private var errorUntil = -1L
-    private var failureChipUntil = -1L
 
     /** Only entry point that accepts a turn; replaces any old/suppressed token. */
     fun beginTurn(token: Long, userSummary: String, roleName: String, nowMillis: Long): BubbleTurnSnapshot {
@@ -115,7 +118,7 @@ class BubblePreviewTurnState {
         return snapshotAt(nowMillis, frame.textChanged)
     }
 
-    /** Stop path: flush finite received text at once, then HOLD/COLLAPSE. */
+    /** Stop path: flush finite received text at once, then HOLD/linger. */
     fun onStop(token: Long, cumulativeText: String, nowMillis: Long): BubbleTurnSnapshot {
         require(nowMillis >= 0L) { "nowMillis must not be negative" }
         if (!isCurrent(token) || suppressed) return snapshotAt(nowMillis, false)
@@ -124,16 +127,15 @@ class BubblePreviewTurnState {
         val frame = preview.onInterrupted(cumulativeText, nowMillis)
         phase = BubbleTurnPhase.STOPPED
         status = BubbleTurnStatus.STOPPED
-        holdUntil = nowMillis + HOLD_MILLIS
-        collapsedUntil = holdUntil + COLLAPSED_MILLIS
+        startHold(nowMillis)
         errorUntil = -1L
-        failureChipUntil = -1L
         return snapshotAt(nowMillis, frame.textChanged)
     }
 
     /**
-     * Error path: flush received text immediately and enter ERROR for 8 s.
-     * No error message, stack or raw response is accepted or stored here.
+     * Error path: flush received text immediately and enter ERROR for 8 s, then
+     * the reply disappears and the user chip lingers. No error message, stack
+     * or raw response is accepted or stored here.
      */
     fun onError(token: Long, cumulativeText: String, nowMillis: Long): BubbleTurnSnapshot {
         require(nowMillis >= 0L) { "nowMillis must not be negative" }
@@ -144,22 +146,9 @@ class BubblePreviewTurnState {
         phase = BubbleTurnPhase.FAILED
         status = BubbleTurnStatus.FAILED
         errorUntil = nowMillis + ERROR_MILLIS
-        failureChipUntil = errorUntil + FAILURE_CHIP_MILLIS
+        lingerUntil = errorUntil + CHIP_LINGER_MILLIS
         holdUntil = -1L
-        collapsedUntil = -1L
         return snapshotAt(nowMillis, frame.textChanged)
-    }
-
-    /** Expand a completed/stopped chip from cached text; no request/replay. */
-    fun onCollapsedClick(token: Long, nowMillis: Long): BubbleTurnSnapshot {
-        require(nowMillis >= 0L) { "nowMillis must not be negative" }
-        if (!isCurrent(token) || suppressed) return snapshotAt(nowMillis, false)
-        if (evaluateDeadlines(nowMillis) != BubbleVisibleState.COLLAPSED ||
-            (phase != BubbleTurnPhase.COMPLETE && phase != BubbleTurnPhase.STOPPED)
-        ) return snapshotAt(nowMillis, false)
-        holdUntil = nowMillis + HOLD_MILLIS
-        collapsedUntil = holdUntil + COLLAPSED_MILLIS
-        return snapshotAt(nowMillis, false)
     }
 
     /** ×, preference off, click-through, panel, app foreground, clear, timeout. */
@@ -192,16 +181,14 @@ class BubblePreviewTurnState {
 
     /**
      * Absolute logical deadline the host must schedule exactly once, or null
-     * when only text ticks (or nothing) remain. This deliberately exposes the
-     * HOLD/error/chip truth instead of running a 33 ms idle loop after the
-     * preview has caught up.
+     * when only text ticks (or nothing) remain.
      */
     fun nextDeadlineMillis(nowMillis: Long): Long? {
         require(nowMillis >= 0L) { "nowMillis must not be negative" }
         if (suppressed || token == null || phase == null) return null
         val candidates = when (phase) {
-            BubbleTurnPhase.FAILED -> listOf(errorUntil, failureChipUntil)
-            BubbleTurnPhase.COMPLETE, BubbleTurnPhase.STOPPED -> listOf(holdUntil, collapsedUntil)
+            BubbleTurnPhase.FAILED -> listOf(errorUntil, lingerUntil)
+            BubbleTurnPhase.COMPLETE, BubbleTurnPhase.STOPPED -> listOf(holdUntil, lingerUntil)
             else -> emptyList()
         }
         return candidates.filter { it > nowMillis }.minOrNull()
@@ -212,7 +199,7 @@ class BubblePreviewTurnState {
     private fun startHold(nowMillis: Long) {
         if (holdUntil < 0L) {
             holdUntil = nowMillis + HOLD_MILLIS
-            collapsedUntil = holdUntil + COLLAPSED_MILLIS
+            lingerUntil = holdUntil + CHIP_LINGER_MILLIS
         }
     }
 
@@ -223,12 +210,12 @@ class BubblePreviewTurnState {
             BubbleTurnPhase.THINKING -> return BubbleVisibleState.THINKING
             BubbleTurnPhase.STREAMING -> return BubbleVisibleState.TYPING
             BubbleTurnPhase.FAILED -> {
-                if (failureChipUntil >= 0L && nowMillis >= failureChipUntil) {
+                if (lingerUntil >= 0L && nowMillis >= lingerUntil) {
                     suppressAtTimeout()
                     return BubbleVisibleState.HIDDEN
                 }
                 return if (errorUntil >= 0L && nowMillis >= errorUntil) {
-                    BubbleVisibleState.COLLAPSED
+                    BubbleVisibleState.CHIP_LINGER
                 } else {
                     BubbleVisibleState.ERROR
                 }
@@ -243,12 +230,12 @@ class BubblePreviewTurnState {
                         BubbleVisibleState.TYPING
                     }
                 }
-                if (collapsedUntil >= 0L && nowMillis >= collapsedUntil) {
+                if (lingerUntil >= 0L && nowMillis >= lingerUntil) {
                     suppressAtTimeout()
                     return BubbleVisibleState.HIDDEN
                 }
                 return if (nowMillis >= holdUntil) {
-                    BubbleVisibleState.COLLAPSED
+                    BubbleVisibleState.CHIP_LINGER
                 } else {
                     BubbleVisibleState.HOLD
                 }
@@ -288,9 +275,8 @@ class BubblePreviewTurnState {
 
     private fun clearDeadlines() {
         holdUntil = -1L
-        collapsedUntil = -1L
+        lingerUntil = -1L
         errorUntil = -1L
-        failureChipUntil = -1L
     }
 
     private fun boundedLabel(value: String, maxGraphemes: Int): String {
@@ -302,9 +288,8 @@ class BubblePreviewTurnState {
 
     companion object {
         const val HOLD_MILLIS: Long = 8_000L
-        const val COLLAPSED_MILLIS: Long = 30_000L
+        const val CHIP_LINGER_MILLIS: Long = 1_000L
         const val ERROR_MILLIS: Long = 8_000L
-        const val FAILURE_CHIP_MILLIS: Long = 30_000L
         const val MAX_SUMMARY_GRAPHEMES: Int = 80
         const val MAX_ROLE_GRAPHEMES: Int = 40
         const val MAX_REPLY_GRAPHEMES: Int = BubblePreviewText.MAX_VISIBLE_GRAPHEMES

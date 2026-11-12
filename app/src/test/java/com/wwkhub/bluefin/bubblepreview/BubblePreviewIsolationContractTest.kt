@@ -271,7 +271,9 @@ class BubblePreviewIsolationContractTest {
         assertFalse(window.contains("FLAG_DIM_BEHIND"))
         assertFalse(window.contains("dimAmount"))
         assertFalse(window.contains("MATCH_PARENT,\n            WindowManager.LayoutParams"))
-        assertFalse(window.contains("Service"))
+        assertFalse(window.contains("extends Service"))
+        assertFalse(window.contains("startService("))
+        assertTrue(window.contains("getSystemService(InputMethodManager::class.java)"))
         assertTrue(window.contains("plan.windowWidthPx"))
         assertTrue(window.contains("plan.windowHeightPx"))
         assertTrue(window.contains("title = BubblePreviewModule.AUDIT_WINDOW_TITLE"))
@@ -281,7 +283,9 @@ class BubblePreviewIsolationContractTest {
         )
 
         val controller = source("src/main/java/$modulePath/BubblePreviewController.kt")
-        assertEquals(1, Regex("BubblePreviewWindow\\(").findAll(controller).count())
+        // One speech window at a time: the reply and input faces each have one
+        // bounded constructor site inside the same controller.
+        assertEquals(2, Regex("BubblePreviewWindow\\(").findAll(controller).count())
     }
 
     @Test

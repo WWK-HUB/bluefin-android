@@ -32,6 +32,10 @@ internal interface BubblePreviewHostActions {
     fun onBubbleStopRequested()
     fun onBubbleNoSpace()
     fun onBubbleRoundFinished(token: Long, reason: BubbleSuppressionReason)
+    fun onBubbleInputSendRequested(text: String)
+    fun onBubbleInputExpandRequested(text: String)
+    fun onBubbleInputDraftChanged(text: String)
+    fun onBubbleInputNoSpace()
 }
 
 /**
@@ -123,6 +127,9 @@ internal class BubblePreviewController(
     private var noSpaceRecorded = false
     private var unresolvedCleanup = false
     private var roundGeneration = 0L
+    private var mode: SpeechBubbleMode? = null
+    private var inputState: SpeechInputSnapshot? = null
+    private var inputLines = 1
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == BluefinStore.KEY_BUBBLE_PREVIEW) {
@@ -214,6 +221,9 @@ internal class BubblePreviewController(
         // first so its window, timers and listener identity cannot leak into the
         // new token. The host has already moved its own signal token forward.
         retireCurrentRoundForReplacement()
+        mode = SpeechBubbleMode.REPLY
+        inputState = null
+        inputLines = 1
         this.token = token
         this.requestGeneration = acceptedRequestGeneration
         this.roleName = acceptedRoleName.trim().ifBlank { "蓝鳍" }
@@ -236,11 +246,157 @@ internal class BubblePreviewController(
         if (frame != null) tryAttach(frame, lastSnapshot!!) else false
     }
 
+    /**
+     * Lazy input-face entry. The host calls this only after the user explicitly
+     * tapped 「对话」 and every gate (attached/pageReady/click-through/pref/
+     * circuit/overlay permission) was rechecked in a posted task. It returns
+     * true when the request is accepted; the window may still wait for the next
+     * trustworthy geometry frame.
+     */
+    fun showInput(
+        token: Long,
+        draftText: String,
+        acceptedRoleName: String,
+        packColors: PackBubbleColors? = null,
+        attemptToken: BubblePreviewDisplayAttempt? = null,
+    ): Boolean = contain(
+        BubblePreviewOperation.CREATE,
+        token = null,
+        onFault = { false },
+    ) {
+        if (destroyed) return@contain false
+        if (unresolvedCleanup || orphanWindow != null) return@contain false
+        if (BubblePreviewProcessSession.isBlocked()) return@contain false
+        if (!BubblePreviewModule.isEnabled()) return@contain false
+        if (!BluefinStore.readBubblePreview(prefs)) return@contain false
+        if (circuit.isTripped()) return@contain false
+        if (mode == SpeechBubbleMode.INPUT && this.token == token) return@contain true
+
+        retireCurrentRoundForReplacement()
+        mode = SpeechBubbleMode.INPUT
+        this.token = token
+        requestGeneration = -1
+        roleName = acceptedRoleName.trim().ifBlank { "蓝鳍" }
+        packBubbleColors = packColors
+        failureText = ""
+        stopRequested = false
+        stopFlushed = false
+        roundFinishedNotified = false
+        failedRound = false
+        noSpaceRecorded = false
+        roundGeneration += 1
+        inputLines = lineCount(draftText)
+        inputState = SpeechInputSnapshot(draftText, draftText.isNotBlank())
+        lastSnapshot = null
+        lastPlan = null
+        attempt = attemptToken ?: circuit.beginDisplayAttempt(now())
+        // Do not attach from the pre-click frame: the orb may still have been
+        // the expanded full-screen panel. The next posted layout frame carries
+        // the compact orb bounds and is the only input-attach trigger.
+        true
+    }
+
+    /** Host updates the in-process draft/line bucket while the input is live. */
+    fun updateInputDraft(text: String) = contain(
+        BubblePreviewOperation.RENDER,
+    ) {
+        if (destroyed || mode != SpeechBubbleMode.INPUT) return@contain
+        val state = SpeechInputSnapshot(text, text.isNotBlank())
+        inputState = state
+        val nextLines = lineCount(text)
+        if (nextLines == inputLines) return@contain
+        inputLines = nextLines
+        val frame = lastFrame ?: return@contain
+        val current = window ?: return@contain
+        val computed = computeInputPlacement(frame, state) ?: return@contain
+        applyInputWindowState(current, state, computed.first, computed.second)
+        afterInputSnapshot()
+    }
+
+    /**
+     * Input send returned STARTED. Keep the same system window and switch its
+     * face to chip + reply: keyboard/focus are released first, the frozen input
+     * face never remains visible, and the accepted round owns this token.
+     */
+    fun beginReplyFromInput(
+        token: Long,
+        userSummary: String,
+        acceptedRoleName: String,
+        acceptedRequestGeneration: Int,
+        packColors: PackBubbleColors? = null,
+    ): Boolean = contain(
+        BubblePreviewOperation.RENDER,
+        onFault = { false },
+    ) {
+        if (destroyed || mode != SpeechBubbleMode.INPUT) return@contain false
+        val frame = lastFrame
+        inputState = null
+        inputLines = 1
+        releaseInputFocus()
+        mode = SpeechBubbleMode.REPLY
+        this.token = token
+        requestGeneration = acceptedRequestGeneration
+        roleName = acceptedRoleName.trim().ifBlank { "蓝鳍" }
+        packBubbleColors = packColors
+        failureText = ""
+        stopRequested = false
+        stopFlushed = false
+        roundFinishedNotified = false
+        failedRound = false
+        noSpaceRecorded = false
+        roundGeneration += 1
+        val state = turnState ?: BubblePreviewTurnState().also { turnState = it }
+        lastSnapshot = state.beginTurn(token, userSummary, this.roleName, now())
+        lastPlan = null
+        val latest = lastSnapshot!!
+        if (frame == null) return@contain true
+        val computed = computeReplyPlacement(frame, latest)
+        if (computed == null) {
+            notifyNoSpace()
+            return@contain false
+        }
+        val current = window
+        if (current == null) {
+            tryAttach(frame, latest)
+        } else {
+            applyWindowState(latest, computed.first, computed.second)
+        }
+        afterSnapshot(latest)
+        true
+    }
+
+    /** Host keeps the input face focused after EMPTY/BUSY. */
+    fun keepInput() {
+        if (mode != SpeechBubbleMode.INPUT || destroyed) return
+        window?.focusInputForTyping()
+    }
+
+    fun focusInput() {
+        if (mode != SpeechBubbleMode.INPUT || destroyed) return
+        window?.focusInputForTyping()
+    }
+
+    fun releaseInputFocus() {
+        window?.releaseInputFocus()
+    }
+
+    fun isInputMode(): Boolean = mode == SpeechBubbleMode.INPUT
+
+    /** IME epochs must not tear down a live input balloon; its own root insets clamp it. */
+    fun onHostInsetsChanged() = contain(
+        BubblePreviewOperation.SCHEDULED,
+    ) {
+        if (destroyed) return@contain
+        if (mode == SpeechBubbleMode.INPUT) return@contain
+        handleHostConfigurationChanged()
+    }
+
     /** Feeds one cumulative snapshot of the accepted current round. */
     fun onChatSignal(signal: BubblePreviewChatSignal) = contain(
         BubblePreviewOperation.SNAPSHOT,
     ) {
         if (destroyed) return@contain
+        if (mode != SpeechBubbleMode.REPLY) return@contain
         val currentToken = token ?: return@contain
         if (signal.token != currentToken) return@contain
         if (signal.requestGeneration != requestGeneration) {
@@ -281,6 +437,10 @@ internal class BubblePreviewController(
         counters.callbackDelivered()
         lastFrame = frame
         if (frame.hostGeneration != hostGeneration) return@contain
+        if (mode == SpeechBubbleMode.INPUT) {
+            handleInputLayout(frame)
+            return@contain
+        }
         val snapshot = lastSnapshot ?: run {
             if (window != null) removeWindow()
             return@contain
@@ -361,6 +521,12 @@ internal class BubblePreviewController(
     ) {
         if (destroyed) return@contain
         if (lastSnapshot?.suppressed == true || token == null) return@contain
+        handleHostConfigurationChanged()
+    }
+
+    private fun handleHostConfigurationChanged() {
+        if (destroyed) return
+        if (lastSnapshot?.suppressed == true || token == null) return
         removeWindow()
         // The old frame carried the previous display/bar/IME epoch. Do not let
         // the coalesced retry reattach a window from stale safe geometry; wait
@@ -374,7 +540,8 @@ internal class BubblePreviewController(
         cancelPendingUpdate()
         noSpaceRecorded = false
         geometryRetryAtMs = now() + GEOMETRY_COALESCE_MS
-        val state = turnState ?: return@contain
+        if (mode == SpeechBubbleMode.INPUT) return
+        val state = turnState ?: return
         lastSnapshot = state.setGeometryAvailable(false, now())
         if (!geometryRetryPending) {
             val generation = roundGeneration
@@ -473,20 +640,249 @@ internal class BubblePreviewController(
 
     fun counterSnapshot(): BubblePreviewCounterSnapshot = counters.snapshot()
 
-    private fun expandCollapsed(snapshot: BubbleTurnSnapshot) = contain(
-        BubblePreviewOperation.RENDER,
+    private fun handleInputLayout(frame: BubblePreviewHostFrame) {
+        val currentToken = token ?: run {
+            if (window != null) removeWindow()
+            return
+        }
+        val state = inputState ?: run {
+            if (window != null) removeWindow()
+            return
+        }
+        if (frame.clickThrough) {
+            dismissInternal(clearRound = true, BubbleSuppressionReason.CLICK_THROUGH)
+            return
+        }
+        if (frame.hidden || frame.opacity <= 0f) {
+            dismissInternal(clearRound = true, BubbleSuppressionReason.PREF_OFF)
+            return
+        }
+        if (!frame.stageAttached || !frame.pageReady) return
+        if (frame.geometry == null || !frame.geometry.isUsable() ||
+            !frame.geometry.hasCharacterAnchor()
+        ) {
+            return
+        }
+        // Wait for the post-collapse compact orb rectangle. The first frame
+        // after tapping 「对话」 may still describe the expanded record panel;
+        // treating that as "no space" would wrongly fall back to the panel.
+        val orb = frame.geometry.orbWindowBounds
+        val safeForOrb = frame.geometry.safeScreenBounds(dp(BUBBLE_PREVIEW_SAFETY_MARGIN_DP))
+        if (orb != null && safeForOrb != null &&
+            orb.width.toLong() * orb.height.toLong() >
+            safeForOrb.width.toLong() * safeForOrb.height.toLong() / 2L
+        ) {
+            return
+        }
+        val computed = computeInputPlacement(frame, state) ?: run {
+            if (!noSpaceRecorded) {
+                noSpaceRecorded = true
+                notifyNoSpace()
+            }
+            return
+        }
+        val current = window
+        if (current == null) {
+            if (!tryAttachInput(frame, state)) {
+                if (!noSpaceRecorded) {
+                    noSpaceRecorded = true
+                    notifyNoSpace()
+                }
+            }
+            return
+        }
+        if (computed.first != lastPlan) {
+            applyInputWindowState(current, state, computed.first, computed.second)
+        } else {
+            current.updatePlacement(computed.second, frame.geometry?.resolvedAnchor())
+        }
+        if (currentToken != token) return
+    }
+
+    private fun tryAttachInput(
+        frame: BubblePreviewHostFrame,
+        state: SpeechInputSnapshot,
+    ): Boolean {
+        if (destroyed || failedRound || window != null) return false
+        if (unresolvedCleanup || orphanWindow != null) return false
+        if (!isEligible(frame)) return false
+        val compute = computeInputPlacement(frame, state) ?: return false
+        val windowPlan = compute.first
+        val windowPlacement = compute.second
+        val geometry = frame.geometry ?: return false
+        val created = boundary.run(BubblePreviewOperation.CREATE, attempt, now()) {
+            BubblePreviewWindow(
+                context = context,
+                windowManager = windowManager,
+                initialContent = null,
+                initialInput = state,
+                initialFailureText = "",
+                initialPlan = windowPlan,
+                placement = windowPlacement,
+                geometry = geometry,
+                packBubbleColors = packBubbleColors,
+                initialAnchor = geometry.resolvedAnchor(),
+                onRecord = {
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleRecordRequested()
+                    }
+                },
+                onClose = {
+                    dismissInternal(clearRound = true, BubbleSuppressionReason.DISMISS)
+                },
+                onStop = { requestStop() },
+                onExpand = {},
+                onInputSend = { text ->
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleInputSendRequested(text)
+                    }
+                },
+                onInputExpand = { text ->
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleInputExpandRequested(text)
+                    }
+                },
+                onInputDraftChanged = { text ->
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleInputDraftChanged(text)
+                    }
+                    updateInputDraft(text)
+                },
+                onInputNoSpace = {
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleInputNoSpace()
+                    }
+                },
+            )
+        }
+        val candidate = when (created) {
+            is BubblePreviewBoundaryResult.Success -> created.value
+            is BubblePreviewBoundaryResult.Recovered -> {
+                handleBoundaryRecovery(BubblePreviewOperation.CREATE)
+                return false
+            }
+            is BubblePreviewBoundaryResult.Skipped -> return false
+        }
+        if (!isEligible(frame)) {
+            discardWindow(candidate)
+            return false
+        }
+        val added = boundary.run(BubblePreviewOperation.ADD, attempt, now()) {
+            candidate.add()
+        }
+        when (added) {
+            is BubblePreviewBoundaryResult.Success -> Unit
+            is BubblePreviewBoundaryResult.Recovered -> {
+                handleBoundaryRecovery(BubblePreviewOperation.ADD)
+                discardWindow(candidate)
+                return false
+            }
+            is BubblePreviewBoundaryResult.Skipped -> {
+                discardWindow(candidate)
+                return false
+            }
+        }
+        window = candidate
+        mode = SpeechBubbleMode.INPUT
+        placement = windowPlacement
+        lastPlan = windowPlan
+        updateGate.markApplied(now(), windowPlacement)
+        counters.added()
+        attempt?.markVisible(now())
+        scheduleSustainedSuccess()
+        notifyAttached()
+        Log.i(
+            TAG,
+            "speech input add hostGen=$hostGeneration geom=${frame.geometryGeneration} " +
+                "count=${counterSnapshot()}",
+        )
+        return true
+    }
+
+    private fun applyInputWindowState(
+        current: BubblePreviewWindow,
+        state: SpeechInputSnapshot,
+        plan: BubblePreviewLayoutPlan,
+        placement: BubblePreviewPlacement,
     ) {
-        val currentToken = token ?: return@contain
-        if (snapshot.phase != BubbleTurnPhase.COMPLETE &&
-            snapshot.phase != BubbleTurnPhase.STOPPED
-        ) return@contain
-        val state = turnState ?: return@contain
-        val expanded = state.onCollapsedClick(currentToken, now())
-        lastSnapshot = expanded
-        render(expanded, lastFrame)
+        val result = boundary.run(BubblePreviewOperation.UPDATE, attempt, now()) {
+            current.applyInputState(
+                state,
+                plan,
+                placement,
+                lastFrame?.geometry?.resolvedAnchor(),
+            )
+        }
+        if (result is BubblePreviewBoundaryResult.Recovered) {
+            handleBoundaryRecovery(BubblePreviewOperation.UPDATE)
+            return
+        }
+        if (result is BubblePreviewBoundaryResult.Skipped) return
+        lastPlan = plan
+        this.placement = placement
+        updateGate.markApplied(now(), placement)
+        counters.updated()
+    }
+
+    private fun computeInputPlacement(
+        frame: BubblePreviewHostFrame,
+        state: SpeechInputSnapshot,
+    ): Pair<BubblePreviewLayoutPlan, BubblePreviewPlacement>? {
+        val geometry = frame.geometry ?: return null
+        if (!geometry.isUsable() || !geometry.hasCharacterAnchor()) return null
+        val character = geometry.characterBounds ?: return null
+        val anchor = geometry.resolvedAnchor() ?: return null
+        val safe = geometry.safeScreenBounds(dp(BUBBLE_PREVIEW_SAFETY_MARGIN_DP)) ?: return null
+        val landscape = geometry.displayBounds.width > geometry.displayBounds.height
+        val request = SpeechBubbleScaleRequest(
+            mode = SpeechBubbleMode.INPUT,
+            characterScale = characterScale,
+            density = density,
+            scaledDensity = scaledDensity,
+            safeWidthPx = safe.width,
+            safeHeightPx = safe.height,
+            landscape = landscape,
+            inputLines = lineCount(state.text),
+            realBodyLinePx = measuredBodyLinePx,
+            realChipLinePx = measuredNameLinePx,
+        )
+        val plans = SpeechBubbleLayoutPolicy.inputPlans(request)
+        if (plans.isEmpty()) return null
+        val decision = BubblePreviewPlacementPolicy.place(
+            safeBounds = safe,
+            characterBounds = character,
+            anchor = anchor,
+            orbBounds = geometry.orbWindowBounds,
+            plans = plans.take(2),
+            previous = placement,
+            pendingSide = pendingSide,
+            nowElapsedMs = now(),
+            density = density,
+            petGapDp = SPEECH_BUBBLE_PET_GAP_DP.toFloat(),
+            orbGapDp = BUBBLE_PREVIEW_ORB_GAP_DP.toFloat(),
+            landscape = landscape,
+        )
+        pendingSide = decision.pendingSide
+        val chosen = decision.placement ?: return null
+        return chosen.plan to chosen
+    }
+
+    private fun lineCount(text: String): Int {
+        if (text.isEmpty()) return 1
+        // Explicit newlines plus a conservative wrap estimate: the shell may
+        // grow to three lines, then the EditText scrolls inside a fixed box.
+        val explicit = text.count { it == '\n' } + 1
+        val wrapped = text.length / CHARS_PER_INPUT_LINE + 1
+        return maxOf(explicit, wrapped).coerceIn(1, 3)
+    }
+
+    private fun afterInputSnapshot() {
+        cancelTick()
+        cancelDeadline()
     }
 
     private fun tryAttach(frame: BubblePreviewHostFrame, snapshot: BubbleTurnSnapshot): Boolean {
+        if (mode != SpeechBubbleMode.REPLY) return false
         if (destroyed || failedRound || window != null) return false
         if (unresolvedCleanup || orphanWindow != null) return false
         if (!isEligible(frame)) return false
@@ -501,6 +897,7 @@ internal class BubblePreviewController(
                 context = context,
                 windowManager = windowManager,
                 initialContent = snapshot,
+                initialInput = null,
                 initialFailureText = failureTextFor(snapshot),
                 initialPlan = windowPlan,
                 placement = windowPlacement,
@@ -518,10 +915,7 @@ internal class BubblePreviewController(
                 onStop = {
                     requestStop()
                 },
-                onExpand = {
-                    val latest = lastSnapshot ?: return@BubblePreviewWindow
-                    expandCollapsed(latest)
-                },
+                onExpand = {},
             )
         }
         val candidate = when (created) {
@@ -556,6 +950,7 @@ internal class BubblePreviewController(
         }
 
         window = candidate
+        mode = SpeechBubbleMode.REPLY
         placement = windowPlacement
         lastPlan = windowPlan
         geometryRetryAtMs = 0L
@@ -772,115 +1167,52 @@ internal class BubblePreviewController(
     private fun computePlacement(
         frame: BubblePreviewHostFrame,
         snapshot: BubbleTurnSnapshot,
+    ): Pair<BubblePreviewLayoutPlan, BubblePreviewPlacement>? =
+        computeReplyPlacement(frame, snapshot)
+
+    private fun computeReplyPlacement(
+        frame: BubblePreviewHostFrame,
+        snapshot: BubbleTurnSnapshot,
     ): Pair<BubblePreviewLayoutPlan, BubblePreviewPlacement>? {
         val geometry = frame.geometry ?: return null
         if (!geometry.isUsable() || !geometry.hasCharacterAnchor()) return null
         val character = geometry.characterBounds ?: return null
         val anchor = geometry.resolvedAnchor() ?: return null
         val safe = geometry.safeScreenBounds(dp(BUBBLE_PREVIEW_SAFETY_MARGIN_DP)) ?: return null
-        val measured = measuredActionWidths
-        val primaryActions = primaryActionsFor(snapshot)
-        val planActions = primaryActions
-        val primaryWidths = planActions.map { action ->
-            BubblePreviewActionLayout.touchWidthPx(
-                measured[action] ?: 0f,
-                density,
-                actionTargetPx(),
-                BubblePreviewActionLayout.iconWidthPx(action, density),
-            ).toFloat()
-        }
-        val request = BubblePreviewScaleRequest(
+        val landscape = geometry.displayBounds.width > geometry.displayBounds.height
+        val request = SpeechBubbleScaleRequest(
+            mode = SpeechBubbleMode.REPLY,
+            visibleState = snapshot.visibleState,
             characterScale = characterScale,
             density = density,
             scaledDensity = scaledDensity,
             safeWidthPx = safe.width,
             safeHeightPx = safe.height,
-            hasUserSummary = snapshot.userSummary.isNotBlank(),
+            landscape = landscape,
+            hasUserChip = snapshot.userSummary.isNotBlank(),
             realBodyLinePx = measuredBodyLinePx,
-            realNameLinePx = measuredNameLinePx,
-            actionCount = planActions.size,
-            realActionWidthsPx = primaryWidths,
+            realChipLinePx = measuredNameLinePx,
         )
-        val plans = BubblePreviewScalePolicy.fallbackPlans(request)
+        val plans = SpeechBubbleLayoutPolicy.replyPlans(request)
         if (plans.isEmpty()) return null
-
-        val isChip = snapshot.visibleState == BubbleVisibleState.COLLAPSED
-        if (isChip) {
-            val closeWidth = BubblePreviewActionLayout.touchWidthPx(
-                measured[BubblePreviewAction.CLOSE] ?: 0f,
-                density,
-                actionTargetPx(),
-                BubblePreviewActionLayout.iconWidthPx(BubblePreviewAction.CLOSE, density),
-            ).toFloat()
-            val chip = BubblePreviewScalePolicy.chipPlan(request, closeWidth) ?: return null
-            val decision = BubblePreviewPlacementPolicy.place(
-                safeBounds = safe,
-                characterBounds = character,
-                anchor = anchor,
-                orbBounds = geometry.orbWindowBounds,
-                plans = listOf(chip),
-                previous = placement,
-                pendingSide = pendingSide,
-                nowElapsedMs = now(),
-                density = density,
-                petGapDp = BUBBLE_PREVIEW_PET_GAP_DP.toFloat(),
-                orbGapDp = BUBBLE_PREVIEW_ORB_GAP_DP.toFloat(),
-            )
-            pendingSide = decision.pendingSide
-            val chosen = decision.placement ?: return null
-            return chosen.plan to chosen
-        }
-
-        for (plan in plans) {
-            val labels = BubblePreviewActionLayout.choose(
-                state = snapshot.visibleState,
-                contentWidthPx = plan.contentWidthPx,
-                density = density,
-                minimumTouchPx = actionTargetPx(),
-                measured = measured,
-            ) ?: continue
-            val selected = plan.copy(actionLabels = labels)
-            val decision = BubblePreviewPlacementPolicy.place(
-                safeBounds = safe,
-                characterBounds = character,
-                anchor = anchor,
-                orbBounds = geometry.orbWindowBounds,
-                plans = listOf(selected),
-                previous = placement,
-                pendingSide = pendingSide,
-                nowElapsedMs = now(),
-                density = density,
-                petGapDp = BUBBLE_PREVIEW_PET_GAP_DP.toFloat(),
-                orbGapDp = BUBBLE_PREVIEW_ORB_GAP_DP.toFloat(),
-            )
-            pendingSide = decision.pendingSide
-            val chosen = decision.placement ?: continue
-            return chosen.plan to chosen
-        }
-        return null
+        val decision = BubblePreviewPlacementPolicy.place(
+            safeBounds = safe,
+            characterBounds = character,
+            anchor = anchor,
+            orbBounds = geometry.orbWindowBounds,
+            plans = plans.take(2),
+            previous = placement,
+            pendingSide = pendingSide,
+            nowElapsedMs = now(),
+            density = density,
+            petGapDp = SPEECH_BUBBLE_PET_GAP_DP.toFloat(),
+            orbGapDp = BUBBLE_PREVIEW_ORB_GAP_DP.toFloat(),
+            landscape = landscape,
+        )
+        pendingSide = decision.pendingSide
+        val chosen = decision.placement ?: return null
+        return chosen.plan to chosen
     }
-
-    private fun primaryActionsFor(snapshot: BubbleTurnSnapshot): List<BubblePreviewAction> =
-        when (snapshot.visibleState) {
-            BubbleVisibleState.THINKING,
-            BubbleVisibleState.TYPING,
-            -> listOf(
-                BubblePreviewAction.STOP,
-                BubblePreviewAction.RECORDS,
-                BubblePreviewAction.CLOSE,
-            )
-            BubbleVisibleState.HOLD -> listOf(
-                BubblePreviewAction.VIEW_ALL,
-                BubblePreviewAction.RECORDS,
-                BubblePreviewAction.CLOSE,
-            )
-            BubbleVisibleState.ERROR -> listOf(
-                BubblePreviewAction.RECORDS,
-                BubblePreviewAction.CLOSE,
-            )
-            BubbleVisibleState.COLLAPSED -> listOf(BubblePreviewAction.CLOSE)
-            BubbleVisibleState.HIDDEN -> emptyList()
-        }
 
     private fun failureTextFor(snapshot: BubbleTurnSnapshot): String {
         if (snapshot.phase != BubbleTurnPhase.FAILED) return ""
@@ -1246,5 +1578,6 @@ internal class BubblePreviewController(
         const val TAG = "BluefinBubble"
         const val GEOMETRY_COALESCE_MS = 100L
         const val MINIMUM_UPDATE_DELTA_DP = 2f
+        const val CHARS_PER_INPUT_LINE = 16
     }
 }

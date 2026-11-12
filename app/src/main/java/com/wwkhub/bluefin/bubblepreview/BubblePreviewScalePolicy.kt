@@ -59,7 +59,13 @@ internal data class BubblePreviewLayoutPlan(
         BubblePreviewAction.RECORDS,
         BubblePreviewAction.CLOSE,
     ),
-    val collapsedChip: Boolean = false,
+    /** 0.8 speech bubble mode; null keeps the legacy 0.7 preview plan. */
+    val speechMode: SpeechBubbleMode? = null,
+    val showReplyBody: Boolean = true,
+    val showActions: Boolean = false,
+    val chipWidthPx: Int = 0,
+    val chipHeightPx: Int = 0,
+    val speechScale: Float = 0.85f,
 ) {
     val totalTextLines: Int get() = bodyLines + if (includeUserSummary) 1 else 0
 }
@@ -210,76 +216,6 @@ internal object BubblePreviewScalePolicy {
             }
         }
         return null
-    }
-
-    /**
-     * One-line completed/failure chip. It is always at least 44 dp high and uses
-     * the same width/inset scale as the expanded preview. The caller supplies
-     * the measured close touch width; no text is truncated to make it fit.
-     */
-    fun chipPlan(
-        request: BubblePreviewScaleRequest,
-        measuredCloseWidthPx: Float,
-    ): BubblePreviewLayoutPlan? {
-        if (!request.characterScale.isFinite()) return null
-        if (!request.density.isFinite() || request.density <= 0f) return null
-        if (!request.scaledDensity.isFinite() || request.scaledDensity <= 0f) return null
-        if (request.safeWidthPx <= 0 || request.safeHeightPx <= 0) return null
-        val s = request.characterScale.coerceIn(0.50f, 1.30f)
-        val density = request.density
-        val k = kForScale(s)
-        val bodySp = bodyTextSp(s)
-        val labelSp = labelTextSp(s)
-        val bodyTextPx = bodySp * request.scaledDensity
-        val labelTextPx = labelSp * request.scaledDensity
-        val bodyLine = max(
-            request.realBodyLinePx?.takeIf { it.isFinite() && it > 0f } ?: 0f,
-            bodySp * LINE_HEIGHT_REFERENCE * request.scaledDensity,
-        )
-        val nameLine = max(
-            request.realNameLinePx?.takeIf { it.isFinite() && it > 0f } ?: 0f,
-            labelSp * LINE_HEIGHT_REFERENCE * request.scaledDensity,
-        )
-        val padH = PAD_H_DP * k * density
-        val padV = PAD_V_DP * k * density
-        val actionRow = ceil(ACTION_TARGET_DP * density).toInt().coerceAtLeast(1)
-        val closeWidth = max(
-            actionRow.toFloat(),
-            measuredCloseWidthPx.takeIf { it.isFinite() } ?: 0f,
-        )
-        val preferredWidth = preferredWidthDp(s) * density
-        val maxWidth = floor(request.safeWidthPx * WIDTH_SAFE_FRACTION.toDouble()).toInt()
-            .coerceAtLeast(1)
-        val width = min(ceil(preferredWidth.toDouble()).toInt(), maxWidth).coerceAtLeast(1)
-        val contentWidth = width - 2f * padH
-        if (contentWidth < closeWidth) return null
-        val rawChipHeight = max(actionRow.toFloat(), maxOf(2f * padV + bodyLine, 2f * padV + nameLine))
-        val chipHeight = ceil(rawChipHeight.toDouble()).toInt().coerceAtLeast(1)
-        val heightCapPx = floor(
-            min(HEIGHT_CAP_DP * density, request.safeHeightPx * HEIGHT_SAFE_FRACTION)
-                .toDouble(),
-        ).toInt()
-        if (chipHeight > heightCapPx) return null
-        return BubblePreviewLayoutPlan(
-            windowWidthPx = width,
-            windowHeightPx = chipHeight,
-            bodyLines = 0,
-            includeUserSummary = false,
-            bodyTextPx = bodyTextPx,
-            labelTextPx = labelTextPx,
-            padHorizontalPx = padH,
-            padVerticalPx = padV,
-            zoneGapPx = ZONE_GAP_DP * k * density,
-            actionGapPx = ACTION_GAP_DP * k * density,
-            actionRowPx = actionRow,
-            cornerRadiusPx = CORNER_DP * k * density,
-            bodyLineHeightPx = bodyLine,
-            nameLineHeightPx = nameLine,
-            userLineHeightPx = bodyLine,
-            contentWidthPx = contentWidth,
-            actionLabels = listOf(BubblePreviewAction.CLOSE),
-            collapsedChip = true,
-        )
     }
 
     /**

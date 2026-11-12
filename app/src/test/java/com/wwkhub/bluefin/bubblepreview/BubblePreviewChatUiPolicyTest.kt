@@ -311,24 +311,4 @@ class BubblePreviewChatUiPolicyTest {
         assertEquals(right.height, left.height)
     }
 
-    @Test
-    fun collapsedChipIsAtLeastFortyFourDpHigh() {
-        val request = BubblePreviewScaleRequest(
-            characterScale = 1f,
-            density = 2f,
-            scaledDensity = 2f,
-            safeWidthPx = 1080,
-            safeHeightPx = 2000,
-            hasUserSummary = true,
-            realBodyLinePx = 30f,
-            realNameLinePx = 28f,
-            actionCount = 1,
-            realActionWidthsPx = listOf(88f),
-        )
-        val chip = BubblePreviewScalePolicy.chipPlan(request, measuredCloseWidthPx = 88f)
-        assertNotNull(chip)
-        assertTrue(chip!!.windowHeightPx >= 88)
-        assertTrue(chip.collapsedChip)
-        assertEquals(listOf(BubblePreviewAction.CLOSE), chip.actionLabels)
-    }
 }

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="8dp"
+    android:height="14dp"
+    android:viewportWidth="8"
+    android:viewportHeight="14">
+    <!-- 尾尖朝right。基边只填充，与主体 1dp 同色叠缝；两翼 1.5dp 描边在尖端相接。 -->
+    <path
+        android:name="tail_body"
+        android:pathData="M0,0.75 L0,13.25 L1.5,13.25 C4.2,12.1 7.25,9.2 7.25,7 C7.25,4.8 4.2,1.9 1.5,0.75 Z"
+        android:fillColor="@color/bf_speech_reply_fill" />
+    <path
+        android:name="tail_seam"
+        android:pathData="M0,0.75 L0,13.25 L1.5,13.25 L1.5,0.75 Z"
+        android:fillColor="@color/bf_speech_reply_fill" />
+    <path
+        android:name="tail_outline_a"
+        android:pathData="M1.5,0.75 C4.2,1.9 7.25,4.8 7.25,7"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_speech_reply_stroke"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:name="tail_outline_b"
+        android:pathData="M1.5,13.25 C4.2,12.1 7.25,9.2 7.25,7"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_speech_reply_stroke"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

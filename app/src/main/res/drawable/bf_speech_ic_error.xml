@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+    <path
+        android:name="error_body"
+        android:pathData="M8,1.6 A6.4,6.4 0 1,1 8,14.4 A6.4,6.4 0 1,1 8,1.6 Z"
+        android:fillColor="@color/bf_speech_status_error" />
+    <path
+        android:name="error_bang"
+        android:pathData="M8,4.4 L8,9"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/bf_speech_reply_fill"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
+    <path
+        android:name="error_dot"
+        android:pathData="M8,10.6 A0.9,0.9 0 1,1 8,12.4 A0.9,0.9 0 1,1 8,10.6 Z"
+        android:fillColor="@color/bf_speech_reply_fill" />
+</vector>
