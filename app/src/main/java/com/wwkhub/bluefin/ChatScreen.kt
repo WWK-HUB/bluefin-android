@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -62,10 +63,18 @@ class ChatScreen : AppCompatActivity() {
             isAppearanceLightNavigationBars = true
         }
         session = ChatSession.shared(this)
+        val scroll = findViewById<ScrollView>(R.id.chat_scroll)
         transcript = ChatTranscriptView(
-            findViewById(R.id.chat_scroll),
+            scroll,
             findViewById(R.id.chat_messages),
         )
+        val latest = findViewById<MaterialButton>(R.id.chat_jump_latest)
+        latest.setOnClickListener { transcript.showLatest() }
+        fun updateLatestVisibility() {
+            latest.visibility = if (scroll.canScrollVertically(1)) View.VISIBLE else View.GONE
+        }
+        scroll.setOnScrollChangeListener { _, _, _, _, _ -> updateLatestVisibility() }
+        scroll.viewTreeObserver.addOnGlobalLayoutListener { updateLatestVisibility() }
         input = findViewById(R.id.chat_input)
         send = findViewById(R.id.chat_send)
         stop = findViewById(R.id.chat_stop)
@@ -143,6 +152,7 @@ class ChatScreen : AppCompatActivity() {
         }
         val latest = ChatDraft.state.onSendOutcome(capture, draftOutcome)
         applyDraft(latest.text)
+        if (result == ChatSendResult.STARTED) transcript.showLatest()
         if (result == ChatSendResult.NOT_CONFIGURED) ChatEntry.showUnconfigured(this)
         updateSendEnabled()
     }
@@ -151,7 +161,7 @@ class ChatScreen : AppCompatActivity() {
         val generating = snapshot.phase == ChatPhase.THINKING || snapshot.phase == ChatPhase.STREAMING
         busy = snapshot.workerBusy
         configured = snapshot.configured
-        send.visibility = View.VISIBLE
+        send.visibility = if (generating || busy) View.GONE else View.VISIBLE
         stop.visibility = if (generating || busy) View.VISIBLE else View.GONE
         input.isEnabled = true
         updateSendEnabled()

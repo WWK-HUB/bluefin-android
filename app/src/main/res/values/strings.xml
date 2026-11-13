@@ -92,6 +92,7 @@
     <string name="chat_empty">还没有和蓝鳍说过话。</string>
     <string name="chat_thinking">思考中</string>
     <string name="chat_streaming">正在输出</string>
+    <string name="chat_jump_latest">回到最新消息</string>
     <string name="chat_stopped">已停止</string>
     <string name="chat_failed">发送失败</string>
     <string name="chat_clear">清空对话</string>

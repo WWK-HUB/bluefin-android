@@ -283,7 +283,7 @@ internal object SpeechBubbleLayoutPolicy {
                         chipHeight = chipHeight,
                         actions = if (actions) {
                             listOf(
-                                if (canStop) BubblePreviewAction.STOP else BubblePreviewAction.RECORDS,
+                                if (canStop) BubblePreviewAction.STOP else BubblePreviewAction.VIEW_ALL,
                                 BubblePreviewAction.CLOSE,
                             )
                         } else {

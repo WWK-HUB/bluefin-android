@@ -240,7 +240,8 @@ internal class ChatSession private constructor(context: Context) {
                 client = null
             }
         }
-        if (generation == requestGeneration) notifyListeners()
+        // Even an invalidated request releases the busy state after clear.
+        notifyListeners()
     }
 
     private fun finishStoppedLocked(assistantIndex: Int) {
@@ -254,10 +255,10 @@ internal class ChatSession private constructor(context: Context) {
     }
 
     private fun finishFailureLocked(message: String, assistantIndex: Int) {
-        if (assistantIndex in lines.indices && lines[assistantIndex].text.isBlank()) {
-            lines.removeAt(assistantIndex)
-        } else if (assistantIndex in lines.indices) {
+        if (assistantIndex in lines.indices) {
             lines[assistantIndex] = lines[assistantIndex].copy(failed = true)
+        } else {
+            lines.add(ChatLine(role = ChatRole.ASSISTANT, text = "", failed = true))
         }
         phase = ChatPhase.FAILED
         lastError = ChatFailureText.oneLine(message)

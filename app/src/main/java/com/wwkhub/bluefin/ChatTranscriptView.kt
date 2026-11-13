@@ -17,6 +17,17 @@ internal class ChatTranscriptView(
     private val context = messages.context
     private var shown: List<ChatLine> = emptyList()
     private var emptyView: TextView? = null
+    private var followAfterLayout = false
+
+    fun showLatest() {
+        if (followAfterLayout) return
+        followAfterLayout = true
+        messages.doOnNextLayout {
+            followAfterLayout = false
+            scroll.scrollTo(0, messages.bottom)
+        }
+        messages.requestLayout()
+    }
 
     fun render(lines: List<ChatLine>, generating: Boolean) {
         val showEmpty = lines.isEmpty() && !generating
@@ -48,7 +59,7 @@ internal class ChatTranscriptView(
                 setPadding(dp(8), dp(if (inOverlay) 16 else 48), dp(8), dp(16))
             }.also { messages.addView(it) }
         }
-        if (followLatest) messages.doOnNextLayout { scroll.scrollTo(0, messages.bottom) }
+        if (followLatest) showLatest()
     }
 
     private fun createBubble(role: ChatRole): TextView = TextView(context).apply {

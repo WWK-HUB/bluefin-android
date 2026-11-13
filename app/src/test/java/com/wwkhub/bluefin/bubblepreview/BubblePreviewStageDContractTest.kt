@@ -268,7 +268,7 @@ class BubblePreviewStageDContractTest {
         assertTrue(tail.contains("body.right - dp(1)"))
         val actions = methodBody(window, "    private fun buildReplyFace(")
         assertTrue(actions.contains("plan.windowWidthPx - actionWidth"))
-        assertTrue(actions.contains("if (canStopReply()) onStop() else onRecord()"))
+        assertTrue(actions.contains("if (canStopReply()) onStop() else onExpand()"))
         assertTrue(actions.contains("bf_speech_ic_close"))
         assertTrue(actions.contains("touchPx()"))
     }

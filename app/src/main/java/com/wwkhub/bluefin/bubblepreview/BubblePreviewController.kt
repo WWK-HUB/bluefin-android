@@ -28,6 +28,7 @@ import kotlin.math.roundToInt
 internal interface BubblePreviewHostActions {
     fun onBubbleAttached()
     fun onBubbleRecordRequested()
+    fun onBubbleFullChatRequested()
     fun onBubbleAttemptFailed()
     fun onBubbleStopRequested()
     fun onBubbleNoSpace()
@@ -733,7 +734,11 @@ internal class BubblePreviewController(
                     dismissInternal(clearRound = true, BubbleSuppressionReason.DISMISS)
                 },
                 onStop = { requestStop() },
-                onExpand = {},
+                onExpand = {
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleFullChatRequested()
+                    }
+                },
                 onInputSend = { text ->
                     runContained(BubblePreviewOperation.LISTENER) {
                         actions.onBubbleInputSendRequested(text)
@@ -917,7 +922,11 @@ internal class BubblePreviewController(
                 onStop = {
                     requestStop()
                 },
-                onExpand = {},
+                onExpand = {
+                    runContained(BubblePreviewOperation.LISTENER) {
+                        actions.onBubbleFullChatRequested()
+                    }
+                },
             )
         }
         val candidate = when (created) {
@@ -1049,6 +1058,7 @@ internal class BubblePreviewController(
 
     private fun render(snapshot: BubbleTurnSnapshot, frame: BubblePreviewHostFrame?) {
         if (destroyed) return
+        lastSnapshot = snapshot
         if (snapshot.suppressed) {
             val finishedToken = token
             val reason = snapshot.suppressionReason ?: BubbleSuppressionReason.DISMISS
@@ -1071,7 +1081,10 @@ internal class BubblePreviewController(
         }
         if (snapshot.visibleState == BubbleVisibleState.HIDDEN) {
             removeWindow()
-            if (snapshot.geometrySuspended) return
+            if (snapshot.geometrySuspended) {
+                afterSnapshot(snapshot)
+                return
+            }
             val finishedToken = token
             cancelPendingUpdate()
             cancelSustained()
@@ -1088,14 +1101,11 @@ internal class BubblePreviewController(
             }
             return
         }
-        if (frame == null) {
-            afterSnapshot(snapshot)
-            return
-        }
+        afterSnapshot(snapshot)
+        if (frame == null) return
         val computed = computePlacement(frame, snapshot) ?: return
         if (window == null) {
             tryAttach(frame, snapshot)
-            afterSnapshot(snapshot)
             return
         }
         if (computed.first != lastPlan) {
@@ -1104,12 +1114,12 @@ internal class BubblePreviewController(
             window?.updateText(snapshot, failureTextFor(snapshot))
             requestUpdate(frame, computed)
         }
-        afterSnapshot(snapshot)
     }
 
     private fun afterSnapshot(snapshot: BubbleTurnSnapshot) {
         if (destroyed || snapshot.suppressed) return
-        val hasBacklog = snapshot.visibleState == BubbleVisibleState.TYPING &&
+        val hasBacklog = (snapshot.phase == BubbleTurnPhase.STREAMING ||
+            snapshot.phase == BubbleTurnPhase.COMPLETE) &&
             snapshot.visibleGraphemes < snapshot.targetGraphemes
         if (hasBacklog) scheduleTick() else cancelTick()
         scheduleDeadline(snapshot)
@@ -1126,7 +1136,6 @@ internal class BubblePreviewController(
             runContained(BubblePreviewOperation.SCHEDULED) {
                 val state = turnState ?: return@runContained
                 val snapshot = state.onTick(currentToken, now())
-                lastSnapshot = snapshot
                 render(snapshot, lastFrame)
             }
         }
@@ -1157,7 +1166,6 @@ internal class BubblePreviewController(
             runContained(BubblePreviewOperation.SCHEDULED) {
                 val latest = turnState?.snapshot(now()) ?: return@runContained
                 if (latest.token != currentToken) return@runContained
-                lastSnapshot = latest
                 render(latest, lastFrame)
             }
         }

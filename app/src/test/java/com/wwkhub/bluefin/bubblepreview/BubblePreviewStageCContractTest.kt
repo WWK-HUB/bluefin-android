@@ -220,7 +220,7 @@ class BubblePreviewStageCContractTest {
         val send = methodBody(host, "    private fun sendFromOverlay()")
         assertTrue(send.contains("ChatDraft.state.captureSend()"))
         assertTrue(send.contains("ChatDraft.state.onSendOutcome(capture, outcome)"))
-        assertTrue(send.contains("snapshot.lines.lastIndex"))
+        assertTrue(send.contains("snapshot.lines.indexOfLast { it.role == ChatRole.USER }"))
         assertTrue(send.contains("snapshot.requestGeneration"))
     }
 
@@ -284,7 +284,8 @@ class BubblePreviewStageCContractTest {
     fun controllerUsesOneTickerOneDeadlineAndTextOnlyUpdates() {
         val controller = source("src/main/java/$modulePath/BubblePreviewController.kt")
         val after = methodBody(controller, "    private fun afterSnapshot(")
-        assertTrue(after.contains("snapshot.visibleState == BubbleVisibleState.TYPING"))
+        assertTrue(after.contains("snapshot.phase == BubbleTurnPhase.STREAMING"))
+        assertTrue(after.contains("snapshot.phase == BubbleTurnPhase.COMPLETE"))
         assertTrue(after.contains("snapshot.visibleGraphemes < snapshot.targetGraphemes"))
         assertTrue(after.contains("if (hasBacklog) scheduleTick() else cancelTick()"))
 

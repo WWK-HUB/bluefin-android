@@ -980,6 +980,10 @@ internal class OverlayWindow(
             showOrbUnconfiguredPrompt()
             return
         }
+        if (ChatSession.peek()?.snapshot()?.workerBusy == true) {
+            openChatPanel(requestInput = false)
+            return
+        }
         if (clickThrough) {
             openChatPanel(requestInput = false)
             Toast.makeText(
@@ -1167,14 +1171,14 @@ internal class OverlayWindow(
             ChatSendResult.BUSY -> ChatDraftSendOutcome.BUSY
             ChatSendResult.NOT_CONFIGURED -> ChatDraftSendOutcome.NOT_CONFIGURED
         }
-        val latest = ChatDraft.state.onSendOutcome(capture, outcome)
+        ChatDraft.state.onSendOutcome(capture, outcome)
         when (outcome) {
             ChatDraftSendOutcome.STARTED -> {
                 val snapshot = session.snapshot()
                 val replyToken = ++bubbleRequestToken
                 bubbleSignalToken = replyToken
                 bubbleSignalGeneration = snapshot.requestGeneration
-                bubbleSignalUserIndex = snapshot.lines.lastIndex
+                bubbleSignalUserIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER }
                 bubbleInputToken = 0L
                 bubbleInputPending = false
                 bubbleAwaitingAttachToken = null
@@ -1286,7 +1290,7 @@ internal class OverlayWindow(
                 scheduleBubblePreviewAfterStarted(
                     userSummary = bubbleSummary(text),
                     acceptedGeneration = snapshot.requestGeneration,
-                    userIndex = snapshot.lines.lastIndex,
+                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
                 )
             }
             ChatDraftSendOutcome.NOT_CONFIGURED -> {
@@ -1862,6 +1866,12 @@ internal class OverlayWindow(
                 }
             }
 
+            override fun onBubbleFullChatRequested() {
+                postBubbleCallback("full-chat", bubbleSignalToken) {
+                    if (!destroyed && attached) openFullChat()
+                }
+            }
+
             override fun onBubbleAttemptFailed() {
                 postBubbleCallback(
                     "attempt-failed",
@@ -2208,7 +2218,7 @@ internal class OverlayWindow(
 
     private fun bubbleSignalPayload(snapshot: ChatSnapshot): BubbleSignalPayload {
         val userIndex = bubbleSignalUserIndex
-        val indexValid = userIndex >= 0 && userIndex < snapshot.lines.size + 1
+        val indexValid = snapshot.lines.getOrNull(userIndex)?.role == ChatRole.USER
         val assistant = if (indexValid) {
             snapshot.lines
                 .drop((userIndex + 1).coerceAtLeast(0))

@@ -23,12 +23,15 @@ import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AnimationUtils
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -166,6 +169,7 @@ internal class BubblePreviewWindow(
     private var imeFailureNotified = false
     private var imeBottomPx = 0
     private var pendingKeyboardRequest = false
+    private var unregisterInputBack: (() -> Unit)? = null
     private val visibleDisplayFrame = Rect()
 
     private val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -375,10 +379,19 @@ internal class BubblePreviewWindow(
             params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             if (added) windowManager.updateViewLayout(root, params)
             view.requestFocus()
+            registerInputBack()
             showPendingKeyboard()
         } catch (error: Exception) {
             onInputNoSpace()
         }
+    }
+
+    private fun registerInputBack() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || unregisterInputBack != null) return
+        val dispatcher = root.findOnBackInvokedDispatcher() ?: return
+        val callback = OnBackInvokedCallback { requestUserClose() }
+        dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+        unregisterInputBack = { dispatcher.unregisterOnBackInvokedCallback(callback) }
     }
 
     private fun showPendingKeyboard() {
@@ -404,6 +417,13 @@ internal class BubblePreviewWindow(
     fun releaseInputFocus() {
         pendingKeyboardRequest = false
         imeBottomPx = 0
+        try {
+            unregisterInputBack?.invoke()
+        } catch (_: RuntimeException) {
+            // The dispatcher may already have detached with the window.
+        } finally {
+            unregisterInputBack = null
+        }
         try {
             val view = inputView
             view?.clearFocus()
@@ -541,7 +561,15 @@ internal class BubblePreviewWindow(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val edit = EditText(context).apply {
+        val edit = object : EditText(context) {
+            override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
+                if (keyCode == KeyEvent.KEYCODE_BACK && imeBottomPx == 0) {
+                    if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) requestUserClose()
+                    return true
+                }
+                return super.onKeyPreIme(keyCode, event)
+            }
+        }.apply {
             background = null
             setTextColor(inputText)
             setHintTextColor(inputHint)
@@ -743,8 +771,8 @@ internal class BubblePreviewWindow(
             val primary = actionIcon(
                 context,
                 R.drawable.bf_speech_ic_expand,
-                R.string.bf_speech_expand_cd,
-            ) { if (canStopReply()) onStop() else onRecord() }
+                R.string.bf_speech_full_chat_cd,
+            ) { if (canStopReply()) onStop() else onExpand() }
             primaryReplyAction = primary
             updateReplyAction()
             val close = actionIcon(
@@ -939,7 +967,7 @@ internal class BubblePreviewWindow(
     private fun updateReplyAction() {
         val action = primaryReplyAction ?: return
         val description = action.context.getString(
-            if (canStopReply()) R.string.bf_speech_stop_cd else R.string.bf_speech_expand_cd,
+            if (canStopReply()) R.string.bf_speech_stop_cd else R.string.bf_speech_full_chat_cd,
         )
         if (action.contentDescription == description) return
         action.contentDescription = description
