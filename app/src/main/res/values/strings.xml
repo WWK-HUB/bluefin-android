@@ -32,6 +32,7 @@
     <string name="orb_size">角色大小</string>
     <string name="orb_orb_size">小球大小</string>
     <string name="orb_opacity">透明度</string>
+    <string name="overlay_opacity_limited">%1$d%%（悬浮窗上限）</string>
     <string name="orb_roam">底边走动</string>
     <string name="orb_sound">音效</string>
     <string name="orb_click_through">点击穿透</string>

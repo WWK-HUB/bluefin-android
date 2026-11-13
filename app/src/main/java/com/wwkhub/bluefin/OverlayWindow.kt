@@ -515,7 +515,8 @@ internal class OverlayWindow(
             (currentManifest?.canWalk != false)
         val hidden = prefs().getBoolean(BluefinStore.KEY_HIDDEN, false)
         val scale = OverlayPetPolicy.scaleFor(BluefinStore.readScale(prefs()))
-        val opacity = BluefinStore.readOpacity(prefs())
+        val requestedOpacity = BluefinStore.readOpacity(prefs())
+        val opacity = OverlayLayout.effectivePetOpacity(requestedOpacity, params.alpha)
         petHiddenForBubble = hidden
         petOpacityForBubble = opacity
         if (hidden || opacity <= 0f) {
@@ -526,7 +527,7 @@ internal class OverlayWindow(
             }
         }
         val scaleJs = String.format(Locale.US, "%.2f", scale)
-        val opacityJs = String.format(Locale.US, "%.2f", opacity)
+        val opacityJs = OverlayLayout.characterOpacity(requestedOpacity, params.alpha).toString()
         web.evaluateJavascript(
             "window.__bluefinNative&&window.__bluefinNative.applyPrefs($roam,$scaleJs,$hidden,$opacityJs)",
             null,
@@ -701,13 +702,11 @@ internal class OverlayWindow(
         })
 
         val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
-        val opacityValue = orbPanel.findViewById<TextView>(R.id.overlay_opacity_value)
         opacitySlider.max = 100
         opacitySlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (orbSyncing) return
                 val opacity = BluefinStore.progressToOpacity(progress)
-                opacityValue.text = "${(opacity * 100).roundToInt()}%"
                 BluefinStore.writeOpacity(prefs(), opacity)
                 pushPrefs()
             }
@@ -795,8 +794,12 @@ internal class OverlayWindow(
             val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
             opacitySlider.max = 100
             opacitySlider.progress = BluefinStore.opacityToProgress(opacity)
-            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text =
-                "${(opacity * 100).roundToInt()}%"
+            val effective = OverlayLayout.effectivePetOpacity(opacity, params.alpha)
+            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text = if (effective < opacity) {
+                uiContext.getString(R.string.overlay_opacity_limited, (effective * 100).roundToInt())
+            } else {
+                "${(effective * 100).roundToInt()}%"
+            }
             val orbSizeSlider = orbPanel.findViewById<SeekBar>(R.id.overlay_orb_size_slider)
             orbSizeSlider.max = 28
             orbSizeSlider.progress = BluefinStore.orbSizeToProgress(orbSizeDp)

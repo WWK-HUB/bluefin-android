@@ -306,7 +306,7 @@
   function applyCharacterOpacity(value) {
     var opacity = Number(value);
     if (!isFinite(opacity)) opacity = 1;
-    opacity = Math.max(0.00, Math.min(1.00, Math.round(opacity * 100) / 100));
+    opacity = Math.max(0, Math.min(1, opacity));
     window.__bluefinForceOpacity = opacity;
     window.__bluefinCharacterOpacity = opacity;
     window.__bluefinHitsDisabled = opacity <= 0;

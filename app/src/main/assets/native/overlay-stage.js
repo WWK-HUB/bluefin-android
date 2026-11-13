@@ -271,7 +271,7 @@
   function setOpacity(value) {
     var o = Number(value);
     if (!isFinite(o)) o = 1;
-    o = Math.max(0.00, Math.min(1.00, Math.round(o * 100) / 100));
+    o = Math.max(0, Math.min(1, o));
     window.__bluefinForceOpacity = o;
     window.__bluefinCharacterOpacity = o;
     window.__bluefinHitsDisabled = o <= 0;

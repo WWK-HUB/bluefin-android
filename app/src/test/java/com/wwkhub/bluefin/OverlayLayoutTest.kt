@@ -196,11 +196,22 @@ class OverlayLayoutTest {
     fun stageAlphaHonorsTheQueriedMaximumWithinBounds() {
         assertEquals(1f, OverlayLayout.stageAlpha(30, 0.4f))
         assertEquals(0.8f, OverlayLayout.stageAlpha(31))
-        assertEquals(0.8f, OverlayLayout.stageAlpha(31, 1f))
+        assertEquals(1f, OverlayLayout.stageAlpha(31, 1f))
         assertEquals(0.55f, OverlayLayout.stageAlpha(31, 0.55f))
         assertEquals(0f, OverlayLayout.stageAlpha(31, -1f))
         assertEquals(0.8f, OverlayLayout.stageAlpha(31, Float.NaN))
         assertEquals(0.8f, OverlayLayout.stageAlpha(31, Float.POSITIVE_INFINITY))
+    }
+
+    @Test
+    fun petOpacityMatchesTheSettingUpToTheWindowLimit() {
+        val stage = OverlayLayout.stageAlpha(31)
+        assertEquals(0.50f, stage * OverlayLayout.characterOpacity(0.50f, stage), 0.0001f)
+        assertEquals(1f, OverlayLayout.characterOpacity(1f, stage))
+        assertEquals(0.8f, OverlayLayout.effectivePetOpacity(1f, stage))
+        assertEquals(0f, OverlayLayout.characterOpacity(0f, stage))
+        assertEquals(0f, OverlayLayout.characterOpacity(1f, 0f))
+        assertEquals(1f, OverlayLayout.effectivePetOpacity(1f, OverlayLayout.stageAlpha(30)))
     }
 
     @Test
