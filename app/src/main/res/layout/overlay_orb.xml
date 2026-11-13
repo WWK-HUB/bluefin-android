@@ -22,10 +22,9 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/overlay_open_chat"
-                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/open_chat"
                 android:textColor="@android:color/white" />
 
@@ -35,7 +34,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_records"
                 android:textColor="@android:color/white" />
 
@@ -343,6 +342,7 @@
             android:background="@drawable/bg_chat_overlay_input"
             android:hint="@string/chat_input_hint_overlay"
             android:inputType="textMultiLine|textCapSentences"
+            android:imeOptions="flagNoExtractUi|flagNoFullscreen"
             android:maxLength="4000"
             android:maxLines="3"
             android:minHeight="40dp"

@@ -143,7 +143,7 @@ class BubblePreviewStageCContractTest {
         assertTrue(epoch.contains("bubbleGeometryGeneration += 1"))
         assertTrue(epoch.contains("invalidateBubbleScreenSnapshot()"))
         assertTrue(epoch.contains("runBubbleHostCallback(\"insets-epoch\")"))
-        assertTrue(epoch.contains("controller.onHostConfigurationChanged()"))
+        assertTrue(epoch.contains("controller.onHostInsetsChanged()"))
         assertTrue(host.contains("const val INSETS_EPOCH_COALESCE_MS = 100L"))
 
         val capture = methodBody(host, "    private fun bubbleScreenSnapshot(")

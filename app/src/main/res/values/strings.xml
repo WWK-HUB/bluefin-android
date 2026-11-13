@@ -36,7 +36,7 @@
     <string name="orb_sound">音效</string>
     <string name="orb_click_through">点击穿透</string>
     <string name="bubble_preview">对话气泡</string>
-    <string name="bubble_preview_help">在角色旁预览本轮对话。点击穿透开启时不显示。</string>
+    <string name="bubble_preview_help">点小球里的「对话」，可在角色头顶输入并查看回复。开启点击穿透时，可在「记录」里继续。</string>
     <string name="hide">暂停并隐藏</string>
     <string name="hide_help">暂停走动并藏起角色。关掉后按上面的走动开关恢复。</string>
     <string name="sound">音效</string>

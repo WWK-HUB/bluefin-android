@@ -29,7 +29,7 @@
     <dimen name="bf_speech_tail_side_h">14dp</dimen>
     <dimen name="bf_speech_tail_overlap">1dp</dimen>
     <dimen name="bf_speech_tail_clearance">20dp</dimen>
-    <dimen name="bf_speech_action_min">44dp</dimen>
+    <dimen name="bf_speech_action_min">48dp</dimen>
     <dimen name="bf_speech_send_visual_h">32dp</dimen>
     <dimen name="bf_speech_send_min_width">52dp</dimen>
     <dimen name="bf_speech_send_corner">16dp</dimen>

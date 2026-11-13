@@ -1,16 +1,15 @@
 package com.wwkhub.bluefin
 
 import android.content.Intent
-import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.Gravity
 import android.view.View
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
@@ -18,8 +17,7 @@ import com.google.android.material.textfield.TextInputEditText
 /** Full in-app conversation screen. Shares [ChatSession] with the overlay. */
 class ChatScreen : AppCompatActivity() {
     private lateinit var session: ChatSession
-    private lateinit var scroll: ScrollView
-    private lateinit var messages: LinearLayout
+    private lateinit var transcript: ChatTranscriptView
     private lateinit var input: TextInputEditText
     private lateinit var send: MaterialButton
     private lateinit var stop: MaterialButton
@@ -48,10 +46,26 @@ class ChatScreen : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.screen_chat)
+        val root = findViewById<View>(R.id.chat_root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            insets
+        }
+        WindowCompat.getInsetsController(window, root).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
         session = ChatSession.shared(this)
-        scroll = findViewById(R.id.chat_scroll)
-        messages = findViewById(R.id.chat_messages)
+        transcript = ChatTranscriptView(
+            findViewById(R.id.chat_scroll),
+            findViewById(R.id.chat_messages),
+        )
         input = findViewById(R.id.chat_input)
         send = findViewById(R.id.chat_send)
         stop = findViewById(R.id.chat_stop)
@@ -83,12 +97,14 @@ class ChatScreen : AppCompatActivity() {
         // An explicit chat surface is foreground: an existing bubble is
         // suppressed by its own listener. This never constructs a bubble.
         OverlayAppVisibility.setForeground(true)
+        OverlayAppVisibility.setChatVisible(true)
         bindLatestDraft()
         session.addListener(listener)
     }
 
     override fun onStop() {
         session.removeListener(listener)
+        OverlayAppVisibility.setChatVisible(false)
         OverlayAppVisibility.setForeground(false)
         super.onStop()
     }
@@ -158,61 +174,7 @@ class ChatScreen : AppCompatActivity() {
         banner.visibility = if (bannerText.isEmpty()) View.GONE else View.VISIBLE
         banner.text = bannerText
 
-        messages.removeAllViews()
-        if (snapshot.lines.isEmpty() && !generating) {
-            messages.addView(
-                TextView(this).apply {
-                    text = getString(R.string.chat_empty)
-                    textSize = 15f
-                    setTextColor(getColor(R.color.muted))
-                    gravity = Gravity.CENTER
-                    setPadding(0, dp(48), 0, dp(24))
-                },
-            )
-        }
-        snapshot.lines.forEach { line -> messages.addView(bubble(line)) }
-        if (snapshot.phase == ChatPhase.THINKING) {
-            messages.addView(
-                TextView(this).apply {
-                    text = getString(R.string.chat_thinking)
-                    textSize = 13f
-                    setTextColor(getColor(R.color.muted))
-                    setPadding(dp(8), dp(4), dp(8), dp(4))
-                },
-            )
-        }
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-    }
-
-    private fun bubble(line: ChatLine): TextView {
-        val assistant = line.role == ChatRole.ASSISTANT
-        val label = when {
-            line.stopped -> if (line.text.isBlank()) {
-                getString(R.string.chat_stopped)
-            } else {
-                line.text + "\n（${getString(R.string.chat_stopped)}）"
-            }
-            line.failed -> line.text + "\n（${getString(R.string.chat_failed)}）"
-            else -> line.text
-        }
-        return TextView(this).apply {
-            text = label
-            textSize = 15f
-            setTextColor(getColor(R.color.ink))
-            setBackgroundResource(
-                if (assistant) R.drawable.bg_chat_assistant else R.drawable.bg_chat_user,
-            )
-            setPadding(dp(12), dp(9), dp(12), dp(9))
-            typeface = if (assistant) Typeface.DEFAULT else Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                width = (resources.displayMetrics.widthPixels * 0.82f).toInt()
-                gravity = if (assistant) Gravity.START else Gravity.END
-                topMargin = dp(6)
-            }
-        }
+        transcript.render(snapshot.lines, generating)
     }
 
     private fun confirmClear() {
@@ -233,6 +195,4 @@ class ChatScreen : AppCompatActivity() {
             },
         )
     }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

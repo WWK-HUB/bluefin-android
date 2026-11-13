@@ -18,6 +18,8 @@ internal object OverlayAppVisibility {
     @Volatile
     var foreground: Boolean = false
         private set
+    var chatVisible: Boolean = false
+        private set
 
     private val handler = Handler(Looper.getMainLooper())
     private val listeners = LinkedHashSet<Listener>()
@@ -34,6 +36,22 @@ internal object OverlayAppVisibility {
 
     fun addListener(listener: Listener) {
         listeners.add(listener)
+    }
+
+    private val chatVisibilityListeners = LinkedHashSet<Listener>()
+
+    fun setChatVisible(value: Boolean) {
+        if (chatVisible == value) return
+        chatVisible = value
+        chatVisibilityListeners.toList().forEach { it.onAppForegroundChanged(value) }
+    }
+
+    fun addChatVisibilityListener(listener: Listener) {
+        chatVisibilityListeners.add(listener)
+    }
+
+    fun removeChatVisibilityListener(listener: Listener) {
+        chatVisibilityListeners.remove(listener)
     }
 
     fun removeListener(listener: Listener) {

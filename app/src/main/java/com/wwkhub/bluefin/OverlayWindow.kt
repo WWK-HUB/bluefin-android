@@ -95,7 +95,7 @@ internal class OverlayWindow(
     private val orbButton: View
     private val orbPanel: View
     private val chatPanel: View
-    private val chatMessages: android.widget.LinearLayout
+    private val chatTranscript: ChatTranscriptView
     private val chatScroll: android.widget.ScrollView
     private val chatInput: android.widget.EditText
     private val chatSend: View
@@ -176,6 +176,7 @@ internal class OverlayWindow(
     private var bubbleInsetsEpoch: Runnable? = null
     private var bubbleAppVisibilityInstalled = false
     private var bubbleAppVisibilityListener: OverlayAppVisibility.Listener? = null
+    private val chatVisibilityListener = OverlayAppVisibility.Listener { updateChatVisibility(it) }
     private var bubbleDraftWatcherInstalled = false
     private var bubbleInputToken = 0L
     private var bubbleInputPending = false
@@ -226,8 +227,12 @@ internal class OverlayWindow(
         orbButton = orbRoot.findViewById(R.id.overlay_orb_button)
         orbPanel = orbRoot.findViewById(R.id.overlay_orb_panel)
         chatPanel = orbRoot.findViewById(R.id.overlay_chat_panel)
-        chatMessages = orbRoot.findViewById(R.id.overlay_chat_messages)
         chatScroll = orbRoot.findViewById(R.id.overlay_chat_scroll)
+        chatTranscript = ChatTranscriptView(
+            chatScroll,
+            orbRoot.findViewById(R.id.overlay_chat_messages),
+            inOverlay = true,
+        )
         chatInput = orbRoot.findViewById(R.id.overlay_chat_input)
         chatSend = orbRoot.findViewById(R.id.overlay_chat_send)
         chatStop = orbRoot.findViewById(R.id.overlay_chat_stop)
@@ -243,6 +248,8 @@ internal class OverlayWindow(
         setupWebView()
         setupHit()
         setupOrb()
+        OverlayAppVisibility.addChatVisibilityListener(chatVisibilityListener)
+        updateChatVisibility(OverlayAppVisibility.chatVisible)
         root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) = Unit
             override fun onViewDetachedFromWindow(v: View) {
@@ -285,6 +292,7 @@ internal class OverlayWindow(
         } catch (error: Exception) {
             Log.w(TAG, "optional bubble close contained type=${error.javaClass.name}")
         } finally {
+            OverlayAppVisibility.removeChatVisibilityListener(chatVisibilityListener)
             if (bubble?.hasUnresolvedCleanup() != true) bubblePreview = null
             chatSession?.stop()
             chatListener?.let { listener -> chatSession?.removeListener(listener) }
@@ -1413,57 +1421,7 @@ internal class OverlayWindow(
             snapshot.phase == ChatPhase.THINKING || snapshot.phase == ChatPhase.STREAMING
         chatSend.visibility = if (generating) View.GONE else View.VISIBLE
         chatStop.visibility = if (generating) View.VISIBLE else View.GONE
-        chatMessages.removeAllViews()
-        if (snapshot.lines.isEmpty() && !generating) {
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = getString(R.string.chat_empty)
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#B8CCE0"))
-                    setPadding(0, dp(12), 0, dp(8))
-                },
-            )
-        }
-        snapshot.lines.forEach { line ->
-            val assistant = line.role == ChatRole.ASSISTANT
-            val body = when {
-                line.stopped -> if (line.text.isBlank()) {
-                    getString(R.string.chat_stopped)
-                } else {
-                    line.text + "\n（${getString(R.string.chat_stopped)}）"
-                }
-                line.failed -> line.text + "\n（${getString(R.string.chat_failed)}）"
-                else -> line.text
-            }
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = body
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.WHITE)
-                    if (assistant) {
-                        setBackgroundResource(R.drawable.bg_chat_overlay_bubble)
-                        setPadding(dp(7), dp(5), dp(7), dp(5))
-                    } else {
-                        setPadding(dp(3), dp(3), dp(3), dp(3))
-                    }
-                    layoutParams = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(4) }
-                },
-            )
-        }
-        if (snapshot.phase == ChatPhase.THINKING) {
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = getString(R.string.chat_thinking)
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#B8CCE0"))
-                    setPadding(dp(4), dp(4), dp(4), dp(4))
-                },
-            )
-        }
-        chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+        chatTranscript.render(snapshot.lines, generating)
     }
 
     private fun loadOrbPosition() {
@@ -1627,6 +1585,7 @@ internal class OverlayWindow(
     }
 
     private fun placeHit(parsed: JSONObject) {
+        if (OverlayAppVisibility.chatVisible) return
         val hits = parsed.optJSONArray("hits")
         val hasHits = hits != null && hits.length() > 0
         if (!OverlayClickThroughPolicy.shouldAttachHit(clickThrough, hasHits)) {
@@ -1696,6 +1655,17 @@ internal class OverlayWindow(
         } finally {
             hitAttached = false
         }
+    }
+
+    private fun updateChatVisibility(chatVisible: Boolean) {
+        if (destroyed) return
+        if (chatVisible) {
+            collapseOrb()
+            dropHitWindow()
+        }
+        val visibility = if (chatVisible) View.INVISIBLE else View.VISIBLE
+        root.visibility = visibility
+        orbRoot.visibility = visibility
     }
 
     private fun moveHitWithFinger(rawX: Float, rawY: Float) {
@@ -2421,13 +2391,9 @@ internal class OverlayWindow(
                 val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
                 gate.onInsets(imeBottom, visible)
                 if (!knownBefore || stateBefore != gate.state || bottomBefore != gate.bottomPx) {
-                    // The cached snapshot may contain the previous IME edge.
-                    // Drop it and remove the live bubble immediately; the 100 ms
-                    // coalesced epoch only batches subsequent callbacks.
+                    // Drop stale keyboard bounds. The focused input window handles
+                    // its own IME insets without losing the editor or its focus.
                     invalidateBubbleScreenSnapshot()
-                    bubblePreview?.let { controller ->
-                        runBubbleHostCallback("insets") { controller.onHostInsetsChanged() }
-                    }
                     scheduleBubbleInsetsEpoch()
                 }
                 insets
@@ -2449,7 +2415,7 @@ internal class OverlayWindow(
             // The display/bar basis is config-scoped; an IME epoch does not
             // change it, but the screen snapshot (IME edge) is already invalid.
             bubblePreview?.let { controller ->
-                runBubbleHostCallback("insets-epoch") { controller.onHostConfigurationChanged() }
+                runBubbleHostCallback("insets-epoch") { controller.onHostInsetsChanged() }
             }
         }
         bubbleInsetsEpoch = runnable

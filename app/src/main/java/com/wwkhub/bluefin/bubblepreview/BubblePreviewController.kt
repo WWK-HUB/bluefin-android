@@ -382,13 +382,15 @@ internal class BubblePreviewController(
 
     fun isInputMode(): Boolean = mode == SpeechBubbleMode.INPUT
 
-    /** IME epochs must not tear down a live input balloon; its own root insets clamp it. */
+    /** Wait for the next host frame before using the new keyboard bounds. */
     fun onHostInsetsChanged() = contain(
         BubblePreviewOperation.SCHEDULED,
     ) {
-        if (destroyed) return@contain
+        if (destroyed || token == null) return@contain
         if (mode == SpeechBubbleMode.INPUT) return@contain
-        handleHostConfigurationChanged()
+        lastFrame = null
+        pendingUpdatePlacement = null
+        cancelPendingUpdate()
     }
 
     /** Feeds one cumulative snapshot of the accepted current round. */
