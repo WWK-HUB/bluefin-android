@@ -162,6 +162,23 @@ class PackFormatTest {
     }
 
     @Test
+    fun defaultPresetAndCustomOutfitKeepTheirOwnSelections() {
+        val parsed = accepted(manifest(extra = """,
+            "axes": [
+              {"id":"color","name":{"zh":"配色"},"options":[
+                {"id":"blue","name":{"zh":"蓝"}},{"id":"red","name":{"zh":"红"}}]},
+              {"id":"outfit","name":{"zh":"服装"},"options":[
+                {"id":"base","name":{"zh":"原装"}},{"id":"winter","name":{"zh":"冬装"}}]}
+            ],
+            "presets": [{"id":"red-winter","pick":{"color":"red","outfit":"winter"}}]
+        """.trimIndent()))
+        assertEquals("red-winter", parsed.schemeFor(null))
+        assertEquals("red-winter", parsed.schemeFor("removed-preset"))
+        assertEquals("blue-winter", parsed.schemeFor("blue-winter"))
+        assertEquals(mapOf("color" to "blue", "outfit" to "winter"), parsed.picksFor("blue-winter"))
+    }
+
+    @Test
     fun malformedOptionalSoundOrMovesRejectsAndMissingSoundFileSkips() {
         val badSounds = ""","sounds": []""".trimIndent()
         assertEquals(PackReject.INVALID_SOUNDS, rejected(manifest(extra = badSounds)))

@@ -172,6 +172,7 @@
     <string name="character_version">版本 %1$s</string>
     <string name="character_axes">换装</string>
     <string name="character_axis_preset">预设</string>
+    <string name="character_custom_scheme">自选搭配</string>
     <string name="character_cannot_walk">这个角色不会自己走</string>
     <string name="orb_character">当前角色</string>
     <string name="orb_character_change">更换角色</string>

@@ -4,6 +4,17 @@
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@android:color/white</item>
         <item name="colorSurface">@color/paper</item>
+        <item name="colorSurfaceContainerLow">@color/ice</item>
+        <item name="colorSurfaceContainerHigh">@color/ice</item>
+        <item name="colorSurfaceContainerHighest">@color/blue_mist</item>
+        <item name="colorOnSurface">@color/ink</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorPrimaryContainer">@color/blue_mist</item>
+        <item name="colorOnPrimaryContainer">@color/blue_deep</item>
+        <item name="colorSecondaryContainer">@color/blue_mist</item>
+        <item name="colorOnSecondaryContainer">@color/blue_deep</item>
+        <item name="colorOutline">@color/blue_outline</item>
+        <item name="colorOutlineVariant">@color/blue_line</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@color/stage</item>

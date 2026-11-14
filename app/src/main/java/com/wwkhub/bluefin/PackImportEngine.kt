@@ -55,7 +55,7 @@ internal object PackImportEngine {
     const val MANIFEST_FILE = "figure.json"
     const val MAX_IMPORTED_PACKS = 20
 
-    fun analyzeZip(zipFile: File, workDir: File): PackAnalysis {
+    fun analyzeZip(zipFile: File, workDir: File, builtInIds: Set<String> = setOf(PackFormat.BUILT_IN_ID)): PackAnalysis {
         if (!zipFile.isFile) throw PackImportException(PackImportFailure.BAD_ZIP, zipFile.name)
         if (zipFile.length() > HARD_BYTES) {
             throw PackImportException(PackImportFailure.TOO_LARGE, zipFile.length().toString())
@@ -82,6 +82,7 @@ internal object PackImportEngine {
                 val analysis = scan(
                     roots = roots,
                     workDir = workDir,
+                    builtInIds = builtInIds,
                     warningLarge = zipFile.length() > LARGE_BYTES || uncompressed > LARGE_BYTES,
                     readText = { root ->
                         val path = if (root.isEmpty()) MANIFEST_FILE else "$root/$MANIFEST_FILE"
@@ -139,7 +140,7 @@ internal object PackImportEngine {
         }
     }
 
-    fun analyzeFolder(source: File, workDir: File): PackAnalysis {
+    fun analyzeFolder(source: File, workDir: File, builtInIds: Set<String> = setOf(PackFormat.BUILT_IN_ID)): PackAnalysis {
         if (!source.isDirectory) throw PackImportException(PackImportFailure.BAD_ZIP, source.name)
         val staging = File(workDir, "staging")
         staging.mkdirs()
@@ -161,6 +162,7 @@ internal object PackImportEngine {
         return scan(
             roots = roots,
             workDir = workDir,
+            builtInIds = builtInIds,
             warningLarge = total > LARGE_BYTES,
             readText = { root ->
                 val path = if (root.isEmpty()) MANIFEST_FILE else "$root/$MANIFEST_FILE"
@@ -184,6 +186,7 @@ internal object PackImportEngine {
     private fun scan(
         roots: List<String>,
         workDir: File,
+        builtInIds: Set<String>,
         warningLarge: Boolean,
         readText: (String) -> String,
         filesFor: (String) -> Map<String, Long>,
@@ -200,7 +203,7 @@ internal object PackImportEngine {
                 problems.add(PackProblem(source, null, "read:${error.message.orEmpty()}"))
                 return@forEachIndexed
             }
-            when (val validation = PackFormat.validate(raw, files = filesFor(root))) {
+            when (val validation = PackFormat.validate(raw, builtInIds, filesFor(root))) {
                 is PackValidation.Rejected -> {
                     problems.add(PackProblem(source, validation.reason, validation.detail))
                 }

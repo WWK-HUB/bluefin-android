@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- 蓝鳍头顶说话气泡 token；浅/深只换值。文件名 bf_speech_colors.xml，勿覆盖工程 colors.xml。 -->
-    <color name="bf_speech_reply_fill">#C8EBFF</color>
-    <color name="bf_speech_reply_text">#0F3A5C</color>
-    <color name="bf_speech_reply_stroke">#1A6CB8</color>
-    <color name="bf_speech_input_fill">#C8EBFF</color>
-    <color name="bf_speech_input_text">#0F3A5C</color>
-    <color name="bf_speech_input_stroke">#1A6CB8</color>
+    <color name="bf_speech_reply_fill">#F7FBFF</color>
+    <color name="bf_speech_reply_text">#142C50</color>
+    <color name="bf_speech_reply_stroke">#205DC5</color>
+    <color name="bf_speech_input_fill">#F7FBFF</color>
+    <color name="bf_speech_input_text">#142C50</color>
+    <color name="bf_speech_input_stroke">#205DC5</color>
     <color name="bf_speech_input_hint">#3D6A86</color>
-    <color name="bf_speech_input_cursor">#1A6CB8</color>
-    <color name="bf_speech_user_fill">#EEF7FF</color>
+    <color name="bf_speech_input_cursor">#205DC5</color>
+    <color name="bf_speech_user_fill">#E0EEFF</color>
     <color name="bf_speech_user_text">#1A4A6E</color>
-    <color name="bf_speech_user_stroke">#3A82B8</color>
-    <color name="bf_speech_send_fill">#1A6CB8</color>
+    <color name="bf_speech_user_stroke">#5483BD</color>
+    <color name="bf_speech_send_fill">#205DC5</color>
     <color name="bf_speech_send_fill_pressed">#0A558C</color>
     <color name="bf_speech_send_fill_disabled">#D7E8F2</color>
     <color name="bf_speech_send_text">#FFFFFF</color>
     <color name="bf_speech_send_text_disabled">#4A6780</color>
     <color name="bf_speech_expand_bg">#F4FAFF</color>
     <color name="bf_speech_expand_bg_pressed">#D6EBFA</color>
-    <color name="bf_speech_icon">#1A6CB8</color>
+    <color name="bf_speech_icon">#205DC5</color>
     <color name="bf_speech_icon_pressed">#0A558C</color>
-    <color name="bf_speech_icon_on_balloon">#0F3A5C</color>
-    <color name="bf_speech_dot">#1A6CB8</color>
+    <color name="bf_speech_icon_on_balloon">#142C50</color>
+    <color name="bf_speech_dot">#205DC5</color>
     <color name="bf_speech_status_stopped">#3D6A86</color>
     <color name="bf_speech_status_error">#9B2C2C</color>
 </resources>

@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/stage">
+    android:background="@drawable/bg_bluefin_stage">
 
     <WebView
         android:id="@+id/web"
@@ -24,6 +24,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="end|center_vertical"
+            android:layout_marginHorizontal="12dp"
+            android:layout_marginTop="5dp"
+            android:background="@drawable/bg_bluefin_toolbar"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="3dp"
             android:orientation="horizontal">
 
             <TextView
@@ -32,20 +37,20 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:gravity="start|center_vertical"
-                android:paddingStart="8dp"
+                android:paddingStart="12dp"
                 android:paddingEnd="4dp"
                 android:maxLines="1"
                 android:ellipsize="end"
                 android:text="@string/app_name"
                 android:textColor="@color/ink"
-                android:textSize="18sp"
+                android:textSize="21sp"
                 android:textStyle="bold" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/open_chat"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="4dp"
                 android:minWidth="56dp"
                 android:minHeight="48dp"
                 android:paddingHorizontal="8dp"
@@ -54,9 +59,10 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/open_actions"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="4dp"
                 android:minWidth="56dp"
                 android:minHeight="48dp"
                 android:paddingHorizontal="8dp"
@@ -67,7 +73,7 @@
                 android:id="@+id/open_overlay"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="4dp"
                 android:background="@drawable/bg_chrome_button"
                 android:contentDescription="@string/overlay_button"
                 android:padding="12dp"
@@ -103,7 +109,7 @@
         android:id="@+id/status_overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@color/stage"
+        android:background="@drawable/bg_bluefin_stage"
         android:clickable="true"
         android:focusable="true"
         android:gravity="center"

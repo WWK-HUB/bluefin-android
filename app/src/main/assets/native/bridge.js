@@ -233,6 +233,7 @@
     "background:transparent!important;border:0!important}"
   ].join("");
   var IN_APP_STAGE_RULES = [
+    "html,body,#stage{background:transparent!important}",
     "#stage{position:absolute!important;z-index:1;left:0;right:0;",
     "top:calc(" + IN_APP_CHROME_PX + "px + env(safe-area-inset-top, 0px))!important;",
     "bottom:max(" + STAGE_FLOOR_PX + "px, env(safe-area-inset-bottom, 0px))!important;",

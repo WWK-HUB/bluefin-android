@@ -146,10 +146,15 @@ internal data class PackManifest(
     }
 
     fun schemeFor(saved: String?): String {
+        if (saved.isNullOrBlank()) return defaultScheme()
         if (presets.any { it.id == saved }) return saved.orEmpty()
         val picks = picksFor(saved)
         val matching = presets.firstOrNull { preset ->
             axes.all { axis -> preset.pick[axis.id] == picks[axis.id] }
+        }
+        val parts = saved.split('-')
+        if (parts.size != axes.size || axes.indices.any { axes[it].option(parts[it]) == null }) {
+            return defaultScheme()
         }
         return matching?.id ?: axes.map { picks[it.id] }.joinToString("-")
     }

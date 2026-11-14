@@ -10,8 +10,10 @@
         android:layout_height="wrap_content"
         android:clickable="true"
         app:cardBackgroundColor="@color/paper"
-        app:cardCornerRadius="18dp"
-        app:cardElevation="12dp">
+        app:cardCornerRadius="24dp"
+        app:cardElevation="6dp"
+        app:strokeColor="@color/blue_line"
+        app:strokeWidth="1dp">
 
         <LinearLayout
             android:layout_width="match_parent"

@@ -368,18 +368,20 @@ internal class OverlayWindow(
     private fun cheapPackKey(): String {
         val id = currentIdFromPrefs()
         currentPackId = id
-        val scheme = if (id == PackFormat.BUILT_IN_ID) "" else storedScheme(id)
+        val scheme = storedScheme(id)
         return "$id|$scheme"
     }
 
     private fun cheapStageUrl(): String {
         val id = currentPackId
-        if (id == PackFormat.BUILT_IN_ID) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        val scheme = storedScheme(id)
+        if (id == PackFormat.BUILT_IN_ID && scheme.isEmpty()) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        if (PackRepository.hasBundledAsset(appContext, id)) return PreviewEntry.packHostUrl(id, scheme, bundled = true)
         val dir = File(PackRepository.packRoot(appContext), id)
         if (!File(dir, PackImportEngine.MANIFEST_FILE).isFile) {
             return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
         }
-        return PreviewEntry.packHostUrl(id, storedScheme(id))
+        return PreviewEntry.packHostUrl(id, scheme)
     }
 
     private fun currentIdFromPrefs(): String =
@@ -398,7 +400,9 @@ internal class OverlayWindow(
         val appearance = resolved.appearance
         currentPackId = appearance.id
         currentManifest = appearance.manifest
-        val scheme = if (appearance.builtIn) "" else storedScheme(appearance.id)
+        val scheme = if (appearance.id == PackFormat.BUILT_IN_ID) {
+            PackRepository.readScheme(appContext, appearance.manifest)
+        } else storedScheme(appearance.id)
         val key = appearance.id + "|" + scheme
         if (key == loadedPackKey) return
         // If the first page is still loading, leave the old key in place so the
@@ -412,11 +416,9 @@ internal class OverlayWindow(
     }
 
     private fun stageUrlFor(appearance: PackAppearance): String {
-        if (appearance.builtIn) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
-        return PreviewEntry.packHostUrl(
-            appearance.id,
-            PackRepository.readScheme(appContext, appearance.manifest),
-        )
+        val scheme = PackRepository.readScheme(appContext, appearance.manifest)
+        if (appearance.id == PackFormat.BUILT_IN_ID && scheme.isEmpty()) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        return PreviewEntry.packHostUrl(appearance.id, scheme, appearance.builtIn)
     }
 
     @SuppressLint("InflateParams")
@@ -608,6 +610,7 @@ internal class OverlayWindow(
             }
         }
         orbButton.setOnTouchListener { _, event ->
+            BluefinMotion.orbTouch(orbButton, event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     orbDragging = true
@@ -884,7 +887,7 @@ internal class OverlayWindow(
         if (words.isEmpty()) {
             grid.addView(TextView(themedContext).apply {
                 text = getString(R.string.import_no_actions)
-                setTextColor(android.graphics.Color.parseColor("#D9E8F8"))
+                setTextColor(themedContext.getColor(R.color.blue_deep))
                 textSize = 12f
                 setPadding(dp(4), dp(4), dp(4), dp(4))
             })
@@ -901,10 +904,10 @@ internal class OverlayWindow(
                 textSize = 13f
                 isAllCaps = false
                 minWidth = 0
-                minHeight = dp(36)
+                minHeight = dp(48)
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(android.graphics.Color.WHITE)
+                setTextColor(themedContext.getColor(R.color.blue_deep))
                 setPadding(dp(2), 0, dp(2), 0)
                 setOnClickListener {
                     if (word == "walk" && !canWalk) {
@@ -937,10 +940,9 @@ internal class OverlayWindow(
         orbExpanded = true
         chatExpanded = false
         layoutOrb()
-        orbPanel.animate().cancel()
-        orbPanel.translationX = if (orbSideRight) dp(24).toFloat() else -dp(24).toFloat()
-        orbPanel.alpha = 0f
-        orbPanel.animate().translationX(0f).alpha(1f).setDuration(160).start()
+        orbPanel.pivotX = if (orbSideRight) orbPanel.layoutParams.width.toFloat() else 0f
+        orbPanel.pivotY = 0f
+        BluefinMotion.enter(orbPanel, x = dp(if (orbSideRight) 16 else -16).toFloat(), scale = 0.985f)
         Log.i(TAG, "orb expanded")
     }
 
@@ -952,9 +954,13 @@ internal class OverlayWindow(
         orbPanel.animate().cancel()
         chatPanel.animate().cancel()
         orbPanel.translationX = 0f
+        orbPanel.scaleX = 1f
+        orbPanel.scaleY = 1f
         orbPanel.alpha = 1f
         orbPanel.visibility = View.GONE
         chatPanel.translationX = 0f
+        chatPanel.scaleX = 1f
+        chatPanel.scaleY = 1f
         chatPanel.alpha = 1f
         chatPanel.visibility = View.GONE
         hideOrbUnconfiguredPrompt()
@@ -990,10 +996,7 @@ internal class OverlayWindow(
         setOrbFocusable(true)
         renderChat(session.snapshot())
         bindLatestDraft()
-        chatPanel.animate().cancel()
-        chatPanel.translationX = if (orbSideRight) dp(24).toFloat() else -dp(24).toFloat()
-        chatPanel.alpha = 0f
-        chatPanel.animate().translationX(0f).alpha(1f).setDuration(160).start()
+        BluefinMotion.enter(chatPanel, x = dp(if (orbSideRight) 12 else -12).toFloat())
         if (requestInput) {
             chatInput.requestFocus()
             showPanelIme()

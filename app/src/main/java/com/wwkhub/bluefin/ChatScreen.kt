@@ -50,6 +50,9 @@ class ChatScreen : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.screen_chat)
         val root = findViewById<View>(R.id.chat_root)
+        if (savedInstanceState == null) {
+            BluefinMotion.enter(findViewById(R.id.chat_top_bar), y = -8f * resources.displayMetrics.density)
+        }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),

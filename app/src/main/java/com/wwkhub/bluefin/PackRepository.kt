@@ -11,9 +11,9 @@ internal data class PackAppearance(
     val manifest: PackManifest,
     val dir: File?,
 ) {
-    val builtIn: Boolean get() = id == PackFormat.BUILT_IN_ID
-    val displayName: String get() = if (builtIn) BUILT_IN_DISPLAY_NAME else manifest.displayName()
-    val canWalk: Boolean get() = if (builtIn) true else manifest.canWalk
+    val builtIn: Boolean get() = dir == null
+    val displayName: String get() = if (id == PackFormat.BUILT_IN_ID) BUILT_IN_DISPLAY_NAME else manifest.displayName()
+    val canWalk: Boolean get() = manifest.canWalk
 
     companion object {
         const val BUILT_IN_DISPLAY_NAME = "蓝鳍"
@@ -38,6 +38,8 @@ internal object PackRepository {
 
     @Volatile
     private var builtInCache: PackManifest? = null
+    @Volatile
+    private var bundledCache: List<PackAppearance>? = null
 
     fun packRoot(context: Context): File = File(context.applicationContext.filesDir, DIR)
 
@@ -60,19 +62,44 @@ internal object PackRepository {
         dir = null,
     )
 
+    fun listBuiltIn(context: Context): List<PackAppearance> {
+        bundledCache?.let { return it }
+        val assets = context.applicationContext.assets
+        val additional = assets.list(PreviewEntry.BUNDLED_PACKS).orEmpty().sorted().mapNotNull { id ->
+            if (!PackPaths.validId(id) || id == PackFormat.BUILT_IN_ID) return@mapNotNull null
+            val raw = runCatching {
+                assets.open("${PreviewEntry.bundledPackPath(id)}/${PackImportEngine.MANIFEST_FILE}")
+                    .bufferedReader().use { it.readText() }
+            }.getOrNull() ?: return@mapNotNull null
+            val valid = PackFormat.validate(raw, allowBuiltInId = true) as? PackValidation.Accepted
+                ?: return@mapNotNull null
+            if (valid.manifest.id != id) return@mapNotNull null
+            PackAppearance(id, valid.manifest, null)
+        }
+        return (listOf(builtIn(context)) + additional).also { bundledCache = it }
+    }
+
+    fun hasBundledAsset(context: Context, id: String): Boolean = runCatching {
+        context.assets.open("${PreviewEntry.bundledPackPath(id)}/${PackImportEngine.MANIFEST_FILE}").close()
+    }.isSuccess
+
+    private fun builtInIds(context: Context): Set<String> = listBuiltIn(context).mapTo(HashSet()) { it.id }
+
     fun listImported(context: Context): List<PackAppearance> {
+        val protected = builtInIds(context)
         val root = packRoot(context)
         val dirs = root.listFiles()?.filter {
             it.isDirectory && !it.name.startsWith(".") && it.name != "staging"
         }.orEmpty()
         return dirs.mapNotNull { dir ->
             val manifest = readManifest(dir) ?: return@mapNotNull null
+            if (dir.name != manifest.id || manifest.id in protected) return@mapNotNull null
             PackAppearance(id = manifest.id, manifest = manifest, dir = dir)
         }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName })
     }
 
     fun findImported(context: Context, id: String): PackAppearance? {
-        if (!PackPaths.validId(id) || id == PackFormat.BUILT_IN_ID) return null
+        if (!PackPaths.validId(id) || id in builtInIds(context)) return null
         val dir = File(packRoot(context), id)
         if (!dir.isDirectory) return null
         val manifest = readManifest(dir) ?: return null
@@ -86,7 +113,7 @@ internal object PackRepository {
             ?: PackFormat.BUILT_IN_ID
 
     fun setCurrent(context: Context, id: String) {
-        val normalized = if (id == PackFormat.BUILT_IN_ID || findImported(context, id) != null) {
+        val normalized = if (listBuiltIn(context).any { it.id == id } || findImported(context, id) != null) {
             id
         } else {
             PackFormat.BUILT_IN_ID
@@ -97,6 +124,7 @@ internal object PackRepository {
     fun resolveCurrent(context: Context): CurrentAppearance {
         val id = currentId(context)
         if (id == PackFormat.BUILT_IN_ID) return CurrentAppearance(builtIn(context), false)
+        listBuiltIn(context).firstOrNull { it.id == id }?.let { return CurrentAppearance(it, false) }
         val imported = findImported(context, id)
         if (imported != null) return CurrentAppearance(imported, false)
         prefs(context).edit().putString(BluefinStore.KEY_CHARACTER_ID, PackFormat.BUILT_IN_ID).apply()
@@ -117,7 +145,7 @@ internal object PackRepository {
     }
 
     fun delete(context: Context, id: String): Boolean {
-        if (id == PackFormat.BUILT_IN_ID || !PackPaths.validId(id)) return false
+        if (!PackPaths.validId(id) || id in builtInIds(context)) return false
         val dir = File(packRoot(context), id)
         if (!dir.isDirectory) return false
         val deleted = dir.deleteRecursively()
@@ -132,7 +160,7 @@ internal object PackRepository {
         return try {
             val zip = File(work, "source.zip")
             copyUri(context, uri, zip, PackImportEngine.HARD_BYTES)
-            PackImportEngine.analyzeZip(zip, work)
+            PackImportEngine.analyzeZip(zip, work, builtInIds(context))
         } catch (error: PackImportException) {
             work.deleteRecursively()
             throw error
@@ -148,7 +176,7 @@ internal object PackRepository {
             val source = File(work, "source")
             source.mkdirs()
             copyDocumentTree(context, uri, source)
-            PackImportEngine.analyzeFolder(source, work)
+            PackImportEngine.analyzeFolder(source, work, builtInIds(context))
         } catch (error: PackImportException) {
             work.deleteRecursively()
             throw error
@@ -159,6 +187,9 @@ internal object PackRepository {
     }
 
     fun install(context: Context, candidate: PackCandidate, replace: Boolean): PackAppearance {
+        if (candidate.manifest.id in builtInIds(context)) {
+            throw PackImportException(PackImportFailure.IO, "bundled pack")
+        }
         val root = packRoot(context)
         if (PackImportEngine.overCapacity(root, candidate.manifest.id)) {
             throw PackImportException(PackImportFailure.CAPACITY)

@@ -39,11 +39,9 @@ internal class CharacterSection(
     fun refresh() {
         if (activity.isFinishing || activity.isDestroyed) return
         list.removeAllViews()
-        val builtIn = PackRepository.builtIn(activity)
         val current = PackRepository.current(activity)
-        addRow(builtIn, current.id == builtIn.id, removable = false)
-        PackRepository.listImported(activity).forEach { pack ->
-            addRow(pack, current.id == pack.id, removable = true)
+        (PackRepository.listBuiltIn(activity) + PackRepository.listImported(activity)).forEach { pack ->
+            addRow(pack, current.id == pack.id, removable = !pack.builtIn)
             if (current.id == pack.id) addAxes(pack)
         }
     }
@@ -133,16 +131,23 @@ internal class CharacterSection(
             setTextColor(activity.getColor(R.color.ink))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
-        var initializing = true
         val currentScheme = PackRepository.readScheme(activity, manifest)
-        val picks: MutableMap<String, String> = manifest.picksFor(currentScheme).toMutableMap()
+        val picks = manifest.picksFor(currentScheme)
+        fun selectScheme(scheme: String) {
+            val normalized = manifest.schemeFor(scheme)
+            if (normalized == currentScheme) return
+            PackRepository.writeScheme(activity, manifest, normalized)
+            activity.switchCharacter(pack.id)
+        }
 
         if (manifest.presets.isNotEmpty()) {
             box.addView(label(R.string.character_axis_preset))
-            val labels = manifest.presets.map { it.name?.preferred()?.ifBlank { it.id } ?: it.id }
+            val custom = activity.getString(R.string.character_custom_scheme)
+            val labels = listOf(custom) + manifest.presets.map { it.name?.preferred()?.ifBlank { it.id } ?: it.id }
+            val selected = manifest.presets.indexOfFirst { it.id == currentScheme } + 1
             val spinner = Spinner(activity).apply {
                 adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, labels)
-                setSelection(manifest.presets.indexOfFirst { it.id == currentScheme }.coerceAtLeast(0))
+                setSelection(selected, false)
                 onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(
                         parent: android.widget.AdapterView<*>?,
@@ -150,10 +155,9 @@ internal class CharacterSection(
                         position: Int,
                         id: Long,
                     ) {
-                        if (initializing) return
-                        val preset = manifest.presets.getOrNull(position) ?: return
-                        PackRepository.writeScheme(activity, manifest, preset.id)
-                        activity.switchCharacter(pack.id)
+                        if (position == selected || !isAttachedToWindow) return
+                        val preset = manifest.presets.getOrNull(position - 1) ?: return
+                        selectScheme(preset.id)
                     }
 
                     override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
@@ -170,7 +174,8 @@ internal class CharacterSection(
                     android.R.layout.simple_spinner_dropdown_item,
                     axis.options.map { it.name.preferred().ifBlank { it.id } },
                 )
-                setSelection(axis.options.indexOfFirst { it.id == picks[axis.id] }.coerceAtLeast(0))
+                val selected = axis.options.indexOfFirst { it.id == picks[axis.id] }.coerceAtLeast(0)
+                setSelection(selected, false)
                 onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(
                         parent: android.widget.AdapterView<*>?,
@@ -178,14 +183,12 @@ internal class CharacterSection(
                         position: Int,
                         id: Long,
                     ) {
-                        if (initializing) return
+                        if (position == selected || !isAttachedToWindow) return
                         val option = axis.options.getOrNull(position) ?: return
-                        picks[axis.id] = option.id
                         val scheme = manifest.axes.joinToString("-") { axisDef ->
-                            picks.getValue(axisDef.id)
+                            if (axisDef.id == axis.id) option.id else picks.getValue(axisDef.id)
                         }
-                        PackRepository.writeScheme(activity, manifest, scheme)
-                        activity.switchCharacter(pack.id)
+                        selectScheme(scheme)
                     }
 
                     override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
@@ -193,7 +196,6 @@ internal class CharacterSection(
             }
             box.addView(spinner)
         }
-        initializing = false
         list.addView(box)
     }
 
@@ -212,19 +214,30 @@ internal class CharacterSection(
     }
 
     private fun thumbnail(pack: PackAppearance): View {
-        val thumbPath = pack.manifest.thumb
-        val dir = pack.dir
-        if (thumbPath != null && dir != null) {
-            val file = File(dir, thumbPath)
-            if (file.isFile && file.length() <= 1024L * 1024L && PackPaths.isSupportedThumb(thumbPath)) {
-                val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                if (bitmap != null) {
-                    return ImageView(activity).apply {
-                        setImageBitmap(bitmap)
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                        setBackgroundResource(R.drawable.bg_character_current)
-                    }
+        val manifest = pack.manifest
+        val picks = manifest.picksFor(PackRepository.readScheme(activity, manifest))
+        val defaults = manifest.picksFor(manifest.defaultScheme())
+        val axis = manifest.axes.lastOrNull { picks[it.id] != defaults[it.id] } ?: manifest.axes.firstOrNull()
+        val paths = listOfNotNull(axis?.option(picks[axis.id])?.thumb, manifest.thumb).distinct()
+        val bitmap = paths.firstNotNullOfOrNull { raw ->
+            val path = PackPaths.normalizeArchivePath(raw) ?: return@firstNotNullOfOrNull null
+            if (!PackPaths.isSupportedThumb(path)) return@firstNotNullOfOrNull null
+            runCatching {
+                val dir = pack.dir
+                if (dir == null) {
+                    activity.assets.open("${PreviewEntry.bundledPackPath(pack.id)}/$path")
+                        .use { BitmapFactory.decodeStream(it) }
+                } else {
+                    val file = File(dir, path)
+                    if (file.isFile && file.length() <= 1024L * 1024L) BitmapFactory.decodeFile(file.path) else null
                 }
+            }.getOrNull()
+        }
+        if (bitmap != null) {
+            return ImageView(activity).apply {
+                setImageBitmap(bitmap)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundResource(R.drawable.bg_character_current)
             }
         }
         return TextView(activity).apply {

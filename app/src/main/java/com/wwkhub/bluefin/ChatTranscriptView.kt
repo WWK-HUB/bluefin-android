@@ -1,6 +1,5 @@
 package com.wwkhub.bluefin
 
-import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -33,6 +32,7 @@ internal class ChatTranscriptView(
         val showEmpty = lines.isEmpty() && !generating
         if (lines == shown && showEmpty == (emptyView != null)) return
         val followLatest = !scroll.canScrollVertically(1)
+        val wasShowingTranscript = shown.isNotEmpty() || emptyView != null
         emptyView?.let { messages.removeView(it) }
         emptyView = null
         lines.forEachIndexed { index, line ->
@@ -42,7 +42,12 @@ internal class ChatTranscriptView(
                 messages.getChildAt(index) as TextView
             } else {
                 if (previous != null) messages.removeViewAt(index)
-                createBubble(line.role).also { messages.addView(it, index) }
+                createBubble(line.role).also {
+                    messages.addView(it, index)
+                    if (wasShowingTranscript && index == lines.lastIndex && index >= shown.size && followLatest) {
+                        BluefinMotion.enter(it, y = dp(7).toFloat())
+                    }
+                }
             }
             view.text = label(line)
         }
@@ -54,7 +59,7 @@ internal class ChatTranscriptView(
             emptyView = TextView(context).apply {
                 text = context.getString(R.string.chat_empty)
                 textSize = if (inOverlay) 13f else 15f
-                setTextColor(if (inOverlay) 0xFFB8CCE0.toInt() else context.getColor(R.color.muted))
+                setTextColor(context.getColor(R.color.muted))
                 gravity = Gravity.CENTER
                 setPadding(dp(8), dp(if (inOverlay) 16 else 48), dp(8), dp(16))
             }.also { messages.addView(it) }
@@ -65,7 +70,7 @@ internal class ChatTranscriptView(
     private fun createBubble(role: ChatRole): TextView = TextView(context).apply {
         val assistant = role == ChatRole.ASSISTANT
         textSize = if (inOverlay) 14f else 15f
-        setTextColor(if (inOverlay && assistant) Color.WHITE else context.getColor(R.color.ink))
+        setTextColor(context.getColor(R.color.ink))
         setBackgroundResource(when {
             inOverlay && assistant -> R.drawable.bg_chat_overlay_bubble
             assistant -> R.drawable.bg_chat_assistant
