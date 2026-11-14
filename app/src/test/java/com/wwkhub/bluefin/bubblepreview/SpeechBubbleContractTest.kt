@@ -211,7 +211,7 @@ class SpeechBubbleContractTest {
         assertTrue(reply.bodyLines in 1..4)
         assertTrue(reply.chipWidthPx <= floor(min(400.0, 1080 * 0.50)).toInt())
         assertTrue(reply.showActions)
-        assertTrue(reply.actionRowPx >= ceil(88.0).toInt())
+        assertTrue(reply.actionRowPx >= ceil(96.0).toInt())
         assertTrue(reply.windowHeightPx <= floor(min(440.0, 2000 * 0.36)).toInt())
 
         val linger = SpeechBubbleLayoutPolicy.replyPlans(
@@ -219,6 +219,30 @@ class SpeechBubbleContractTest {
         ).first()
         assertFalse(linger.showReplyBody)
         assertTrue(linger.windowHeightPx <= linger.chipHeightPx)
+    }
+
+    @Test
+    fun replyStateIsSavedAndItsTimersRunBeforePlacementCanReturnEarly() {
+        val controller = source("src/main/java/$modulePath/BubblePreviewController.kt")
+        val render = methodBody(controller, "    private fun render(")
+        val save = render.indexOf("lastSnapshot = snapshot")
+        val placement = render.indexOf("computePlacement(frame, snapshot)")
+        assertTrue(save in 0 until placement)
+        assertTrue(render.indexOf("afterSnapshot(snapshot)") in save until placement)
+    }
+
+    @Test
+    fun replyActionsKeepTheirPositionWhenGenerationFinishes() {
+        val streaming = SpeechBubbleLayoutPolicy.replyPlans(
+            request(SpeechBubbleMode.REPLY, state = BubbleVisibleState.TYPING),
+        ).first()
+        val complete = SpeechBubbleLayoutPolicy.replyPlans(
+            request(SpeechBubbleMode.REPLY, state = BubbleVisibleState.HOLD),
+        ).first()
+        assertEquals(streaming.windowHeightPx, complete.windowHeightPx)
+        assertEquals(listOf(BubblePreviewAction.STOP, BubblePreviewAction.CLOSE), streaming.actionLabels)
+        assertEquals(listOf(BubblePreviewAction.VIEW_ALL, BubblePreviewAction.CLOSE), complete.actionLabels)
+        assertTrue(complete.chipHeightPx >= complete.actionRowPx)
     }
 
     @Test

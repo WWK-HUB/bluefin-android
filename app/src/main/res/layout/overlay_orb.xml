@@ -22,10 +22,9 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/overlay_open_chat"
-                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/open_chat"
                 android:textColor="@android:color/white" />
 
@@ -35,9 +34,35 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_records"
-                android:textColor="@android:color/white" />
+                android:textColor="@color/ink" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_look_screen"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="48dp"
+                    android:text="@string/look_screen"
+                    android:textColor="@color/ink" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_screen_settings"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="48dp"
+                    android:text="@string/screen_awareness"
+                    android:textColor="@color/ink" />
+            </LinearLayout>
 
             <LinearLayout
                 android:id="@+id/overlay_orb_unconfigured"
@@ -53,7 +78,7 @@
                     android:paddingStart="4dp"
                     android:paddingEnd="4dp"
                     android:text="@string/chat_unconfigured"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/ink"
                     android:textSize="12sp" />
 
                 <LinearLayout
@@ -67,15 +92,15 @@
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:minHeight="40dp"
+                        android:minHeight="48dp"
                         android:text="@string/cancel"
-                        android:textColor="#D9E8F8" />
+                        android:textColor="@color/muted" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/overlay_unconfigured_settings"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:minHeight="40dp"
+                        android:minHeight="48dp"
                         android:text="@string/chat_go_settings" />
                 </LinearLayout>
             </LinearLayout>
@@ -88,7 +113,7 @@
                 android:paddingEnd="4dp"
                 android:paddingBottom="4dp"
                 android:text="@string/chat_unconfigured_orb"
-                android:textColor="#D9E8F8"
+                android:textColor="@color/muted"
                 android:textSize="12sp" />
 
             <LinearLayout
@@ -104,7 +129,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/orb_title"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/ink"
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
@@ -114,9 +139,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:minWidth="0dp"
-                    android:minHeight="36dp"
+                    android:minHeight="48dp"
                     android:text="@string/orb_character_change"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="12sp" />
             </LinearLayout>
 
@@ -141,7 +166,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/orb_size"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/ink"
                     android:textSize="13sp" />
 
                 <TextView
@@ -149,7 +174,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="0.85"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -172,7 +197,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/orb_opacity"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/ink"
                     android:textSize="13sp" />
 
                 <TextView
@@ -180,7 +205,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="100%"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -202,14 +227,14 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/opacity_solid"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="12sp" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/opacity_faint"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="12sp" />
             </LinearLayout>
 
@@ -225,7 +250,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/orb_orb_size"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/ink"
                     android:textSize="13sp" />
 
                 <TextView
@@ -233,7 +258,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="48dp"
-                    android:textColor="#D9E8F8"
+                    android:textColor="@color/muted"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -250,27 +275,27 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:minHeight="36dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_roam"
-                android:textColor="@android:color/white"
+                android:textColor="@color/ink"
                 android:textSize="13sp" />
 
             <com.google.android.material.switchmaterial.SwitchMaterial
                 android:id="@+id/overlay_sound_switch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="36dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_sound"
-                android:textColor="@android:color/white"
+                android:textColor="@color/ink"
                 android:textSize="13sp" />
 
             <com.google.android.material.switchmaterial.SwitchMaterial
                 android:id="@+id/overlay_click_through_switch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="36dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_click_through"
-                android:textColor="@android:color/white"
+                android:textColor="@color/ink"
                 android:textSize="13sp" />
 
             <com.google.android.material.button.MaterialButton
@@ -279,18 +304,18 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_hide"
-                android:textColor="@android:color/white" />
+                android:textColor="@color/ink" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/overlay_return_button"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/orb_return"
-                android:textColor="@android:color/white" />
+                android:textColor="@color/ink" />
         </LinearLayout>
     </ScrollView>
 
@@ -308,8 +333,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/chat_records_title"
-            android:textColor="@android:color/white"
-            android:textSize="14sp"
+            android:textColor="@color/ink"
+            android:textSize="17sp"
             android:textStyle="bold" />
 
         <TextView
@@ -317,7 +342,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/chat_unconfigured_orb"
-            android:textColor="#D9E8F8"
+            android:textColor="@color/muted"
             android:textSize="12sp" />
 
         <ScrollView
@@ -343,12 +368,13 @@
             android:background="@drawable/bg_chat_overlay_input"
             android:hint="@string/chat_input_hint_overlay"
             android:inputType="textMultiLine|textCapSentences"
+            android:imeOptions="flagNoExtractUi|flagNoFullscreen"
             android:maxLength="4000"
             android:maxLines="3"
-            android:minHeight="40dp"
+            android:minHeight="48dp"
             android:padding="8dp"
-            android:textColor="@android:color/white"
-            android:textColorHint="#B8CCE0"
+            android:textColor="@color/ink"
+            android:textColorHint="@color/muted"
             android:textSize="13sp" />
 
         <LinearLayout
@@ -361,7 +387,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/chat_send"
                 android:textSize="13sp" />
 
@@ -372,9 +398,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:layout_weight="1"
-                android:minHeight="40dp"
+                android:minHeight="48dp"
                 android:text="@string/chat_stop"
-                android:textColor="@android:color/white"
+                android:textColor="@color/ink"
                 android:textSize="13sp"
                 android:visibility="gone" />
         </LinearLayout>
@@ -384,9 +410,9 @@
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="36dp"
+            android:minHeight="48dp"
             android:text="@string/chat_open_settings"
-            android:textColor="#D9E8F8"
+            android:textColor="@color/muted"
             android:textSize="12sp"
             android:visibility="gone" />
 
@@ -401,9 +427,9 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:minHeight="36dp"
+                android:minHeight="48dp"
                 android:text="@string/chat_full_view"
-                android:textColor="#D9E8F8"
+                android:textColor="@color/muted"
                 android:textSize="12sp" />
 
             <com.google.android.material.button.MaterialButton
@@ -411,22 +437,20 @@
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:minHeight="36dp"
+                android:minHeight="48dp"
                 android:text="@string/chat_collapse"
-                android:textColor="#D9E8F8"
+                android:textColor="@color/muted"
                 android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
 
-    <TextView
+    <ImageView
         android:id="@+id/overlay_orb_button"
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:background="@drawable/bg_orb"
         android:contentDescription="@string/orb_label"
-        android:gravity="center"
-        android:text="鳍"
-        android:textColor="@android:color/white"
-        android:textSize="18sp"
-        android:textStyle="bold" />
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_bluefin_orb" />
 </FrameLayout>

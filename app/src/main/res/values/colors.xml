@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ink">#203354</color>
-    <color name="muted">#5C7394</color>
-    <color name="accent">#2F6FAD</color>
-    <color name="paper">#F7FAFF</color>
-    <color name="stage">#D7E6F8</color>
-    <color name="ic_launcher_background">#2F6FAD</color>
+    <color name="ink">#142C50</color>
+    <color name="muted">#476383</color>
+    <color name="accent">#205DC5</color>
+    <color name="paper">#FFFFFF</color>
+    <color name="stage">#EAF3FF</color>
+    <color name="ic_launcher_background">#205DC5</color>
+    <color name="ice">#F1F7FF</color>
+    <color name="blue_mist">#E0EEFF</color>
+    <color name="blue_line">#CADDF3</color>
+    <color name="blue_outline">#7193B9</color>
+    <color name="blue_deep">#16458F</color>
+    <color name="overlay_paper">#FCF8FBFF</color>
 </resources>

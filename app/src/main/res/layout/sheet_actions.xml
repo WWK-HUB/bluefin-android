@@ -22,7 +22,7 @@
             android:paddingBottom="6dp"
             android:text="@string/actions_title"
             android:textColor="@color/ink"
-            android:textSize="18sp"
+            android:textSize="21sp"
             android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton

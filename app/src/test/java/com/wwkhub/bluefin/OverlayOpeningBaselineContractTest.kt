@@ -29,7 +29,7 @@ class OverlayOpeningBaselineContractTest {
     private val expectedScreenSizeSha =
         "d47f516485e9e54f4e4ff24fa29294c83e8f68f08a7f4082057d92bfb796fbf1"
     private val expectedSetupOrbSha =
-        "97c4837e4e76742be9fda612f3a4446b8f229c6047018fa135cc41cc6cdc1814"
+        "4cde264e1807df3fe68534293670e5a74d836c1bd6c31afa69c542c3c3b6cdac"
     private val expectedSetupWebViewSha =
         "e0d1d518c992781732b315efb1ef571368dae952514e407e18025b552a4ce586"
     private val expectedInflateRootSha =

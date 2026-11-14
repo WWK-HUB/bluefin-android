@@ -51,6 +51,10 @@ internal object ChatEntry {
         openScreen(context, ChatDraft.state.issueHandoff().token)
     }
 
+    fun completeScreenDraft(capture: ChatDraftCapture) {
+        ChatDraft.state.onSendOutcome(capture, ChatDraftSendOutcome.STARTED)
+    }
+
     fun showUnconfigured(activity: Activity) {
         if (activity.isFinishing || activity.isDestroyed) return
         MaterialAlertDialogBuilder(activity)

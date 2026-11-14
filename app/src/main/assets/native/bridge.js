@@ -233,6 +233,7 @@
     "background:transparent!important;border:0!important}"
   ].join("");
   var IN_APP_STAGE_RULES = [
+    "html,body,#stage{background:transparent!important}",
     "#stage{position:absolute!important;z-index:1;left:0;right:0;",
     "top:calc(" + IN_APP_CHROME_PX + "px + env(safe-area-inset-top, 0px))!important;",
     "bottom:max(" + STAGE_FLOOR_PX + "px, env(safe-area-inset-bottom, 0px))!important;",
@@ -306,7 +307,7 @@
   function applyCharacterOpacity(value) {
     var opacity = Number(value);
     if (!isFinite(opacity)) opacity = 1;
-    opacity = Math.max(0.00, Math.min(1.00, Math.round(opacity * 100) / 100));
+    opacity = Math.max(0, Math.min(1, opacity));
     window.__bluefinForceOpacity = opacity;
     window.__bluefinCharacterOpacity = opacity;
     window.__bluefinHitsDisabled = opacity <= 0;

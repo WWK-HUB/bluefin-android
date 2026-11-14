@@ -247,7 +247,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             .addPathHandler("/packs/", PackAssetHandler(this))
             .build()
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
-        binding.web.setBackgroundColor(getColor(R.color.stage))
+        binding.web.setBackgroundColor(android.graphics.Color.TRANSPARENT)
         binding.web.overScrollMode = View.OVER_SCROLL_NEVER
         binding.web.isVerticalScrollBarEnabled = false
         binding.web.isHorizontalScrollBarEnabled = false
@@ -305,8 +305,9 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         loadingEntry = true
         try {
             val appearance = refreshCharacter()
-            val scheme = if (appearance.builtIn) "" else PackRepository.readScheme(this, appearance.manifest)
-            val key = if (appearance.builtIn) "builtin" else "pack:${appearance.id}:$scheme"
+            val scheme = PackRepository.readScheme(this, appearance.manifest)
+            val useDefaultPreview = appearance.id == PackFormat.BUILT_IN_ID && scheme.isEmpty()
+            val key = "pack:${appearance.id}:$scheme"
             if (!force && key == lastLoadedEntryKey && previewReady) return
             lastLoadedEntryKey = key
             pollGeneration++
@@ -314,7 +315,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             previewReady = false
             binding.openActions.isEnabled = false
             dismissTips()
-            if (!appearance.builtIn) {
+            if (!useDefaultPreview) {
                 entryPath = PreviewEntry.PACK_HOST
                 binding.selfTestBanner.visibility = View.GONE
                 if (!assetExists(PreviewEntry.PACK_HOST)) {
@@ -322,7 +323,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
                     return
                 }
                 showStatus(getString(R.string.loading), error = false)
-                val url = PreviewEntry.packHostUrl(appearance.id, scheme)
+                val url = PreviewEntry.packHostUrl(appearance.id, scheme, appearance.builtIn)
                 Log.i(TAG, "load pack $url")
                 binding.web.loadUrl(url)
                 return
@@ -649,7 +650,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             dialog.dismiss()
         }
         val stand = view.findViewById<View>(R.id.action_stand)
-        if (appearance.builtIn) {
+        if (appearance.id == PackFormat.BUILT_IN_ID) {
             stand.visibility = View.VISIBLE
             stand.setOnClickListener { pick("stand") }
             fillActionGrid(view.findViewById(R.id.actions_motions), packVocab("motion"), ::pick)
@@ -730,12 +731,14 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         val density = resources.displayMetrics.density
         val gap = (3 * density).roundToInt()
         words.forEach { (word, label) ->
-            val button = com.google.android.material.button.MaterialButton(this).apply {
+            val button = com.google.android.material.button.MaterialButton(
+                this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle,
+            ).apply {
                 text = label
                 textSize = 13f
                 isAllCaps = false
                 minWidth = 0
-                minHeight = (44 * density).roundToInt()
+                minHeight = dp(48)
                 gravity = Gravity.CENTER
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
@@ -1127,6 +1130,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             window.setGravity(Gravity.TOP)
         }
         dialog.setOnShowListener {
+            BluefinMotion.enter(content.findViewById(R.id.tips_card), y = -dp(8).toFloat())
             dialog.window?.let { window ->
                 window.setLayout(
                     WindowManager.LayoutParams.MATCH_PARENT,

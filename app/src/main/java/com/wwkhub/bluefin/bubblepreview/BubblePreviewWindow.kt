@@ -8,22 +8,30 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.os.Build
 import android.provider.Settings
 import android.text.Editable
+import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AnimationUtils
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -32,6 +40,7 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.wwkhub.bluefin.ChatDraftState
 import com.wwkhub.bluefin.PackBubbleColors
 import com.wwkhub.bluefin.R
 import com.wwkhub.bluefin.bubblepreview.visual.BubblePreviewPackPaletteInput
@@ -44,8 +53,6 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val EXIT_ANIMATION_MILLIS = 80L
-private const val INPUT_MIN_TOUCH_DP = 44
-private const val IME_FAILURE_CHECK_MILLIS = 900L
 
 /**
  * One bounded removal attempt sequence shared by the live window and the JVM
@@ -150,6 +157,7 @@ internal class BubblePreviewWindow(
     private var chipView: TextView? = null
     private var inputView: EditText? = null
     private var sendView: TextView? = null
+    private var primaryReplyAction: ImageView? = null
     private var thinkingDots: ImageView? = null
     private var contentView: View? = null
     private var bodyContainer: View? = null
@@ -159,8 +167,10 @@ internal class BubblePreviewWindow(
     private var added = false
     private var applyingInputText = false
     private var imeFailureNotified = false
-    private var imeSeen = false
-    private var imeCheckRunnable: Runnable? = null
+    private var imeBottomPx = 0
+    private var pendingKeyboardRequest = false
+    private var unregisterInputBack: (() -> Unit)? = null
+    private val visibleDisplayFrame = Rect()
 
     private val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -200,6 +210,9 @@ internal class BubblePreviewWindow(
 
     init {
         root.setBackgroundColor(Color.TRANSPARENT)
+        root.viewTreeObserver.addOnWindowFocusChangeListener { focused ->
+            if (focused) showPendingKeyboard()
+        }
         root.isClickable = true
         root.contentDescription = null
         params.apply {
@@ -214,6 +227,11 @@ internal class BubblePreviewWindow(
             }
         }
         installImeListener()
+        root.viewTreeObserver.addOnGlobalLayoutListener {
+            if (mode == SpeechBubbleMode.INPUT && added && !destroyedForCleanup) {
+                refreshInputImeInset()
+            }
+        }
         rebuild(animate = false)
     }
 
@@ -222,9 +240,7 @@ internal class BubblePreviewWindow(
         added = true
         root.post {
             if (destroyedForCleanup || closingForUser) return@post
-            if (mode == SpeechBubbleMode.INPUT) {
-                focusInputForTyping()
-            } else if (animationsEnabled()) {
+            if (mode == SpeechBubbleMode.REPLY && animationsEnabled()) {
                 try {
                     contentView?.startAnimation(
                         AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_enter),
@@ -255,7 +271,8 @@ internal class BubblePreviewWindow(
         appliedY = nextY
         side = placement.side
         anchor = nextAnchor
-        if (sideChanged || anchorChanged) layoutVisual(animate = false)
+        if (sideChanged) layoutVisual(animate = false)
+        else if (anchorChanged) positionTail()
         updateWindow()
     }
 
@@ -303,9 +320,7 @@ internal class BubblePreviewWindow(
         nextAnchor: BubblePreviewPoint?,
     ) {
         if (destroyedForCleanup || closingForUser) return
-        val sizeChanged = plan.windowWidthPx != nextPlan.windowWidthPx ||
-            plan.windowHeightPx != nextPlan.windowHeightPx ||
-            plan.bodyLines != nextPlan.bodyLines
+        val previousPlan = plan
         input = state
         plan = nextPlan
         side = placement.side
@@ -316,11 +331,23 @@ internal class BubblePreviewWindow(
         params.height = nextPlan.windowHeightPx
         params.x = appliedX
         params.y = appliedY
-        if (mode != SpeechBubbleMode.INPUT || sizeChanged) {
+        if (mode != SpeechBubbleMode.INPUT) {
             mode = SpeechBubbleMode.INPUT
             rebuild(animate = false)
-            if (added) focusInputForTyping()
         } else {
+            if (previousPlan != nextPlan) {
+                contentView?.layoutParams = FrameLayout.LayoutParams(
+                    plan.windowWidthPx,
+                    plan.windowHeightPx,
+                )
+                styleInputRow()
+                inputView?.apply {
+                    maxLines = plan.bodyLines.coerceAtLeast(1)
+                    setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
+                }
+                sendView?.setTextSize(TypedValue.COMPLEX_UNIT_PX, plan.bodyTextPx)
+            }
+            layoutVisual(animate = false)
             updateInputViews()
         }
         updateWindow()
@@ -347,19 +374,38 @@ internal class BubblePreviewWindow(
         if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return
         val view = inputView ?: return
         try {
+            pendingKeyboardRequest = true
             params.flags = baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
             params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             if (added) windowManager.updateViewLayout(root, params)
             view.requestFocus()
-            view.post {
-                if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return@post
-                val imm = root.context.getSystemService(InputMethodManager::class.java)
-                imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
-                root.requestApplyInsets()
-                scheduleImeFailureCheck()
-            }
+            registerInputBack()
+            showPendingKeyboard()
         } catch (error: Exception) {
             onInputNoSpace()
+        }
+    }
+
+    private fun registerInputBack() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || unregisterInputBack != null) return
+        val dispatcher = root.findOnBackInvokedDispatcher() ?: return
+        val callback = OnBackInvokedCallback { requestUserClose() }
+        dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+        unregisterInputBack = { dispatcher.unregisterOnBackInvokedCallback(callback) }
+    }
+
+    private fun showPendingKeyboard() {
+        val view = inputView ?: return
+        if (!pendingKeyboardRequest || !view.hasWindowFocus()) return
+        view.post {
+            if (!pendingKeyboardRequest || destroyedForCleanup || closingForUser ||
+                mode != SpeechBubbleMode.INPUT || inputView !== view ||
+                !view.hasWindowFocus() || !view.hasFocus()
+            ) return@post
+            pendingKeyboardRequest = false
+            val imm = root.context.getSystemService(InputMethodManager::class.java)
+            imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+            root.requestApplyInsets()
         }
     }
 
@@ -369,9 +415,15 @@ internal class BubblePreviewWindow(
      * the content changes or the window is removed.
      */
     fun releaseInputFocus() {
-        imeCheckRunnable?.let { root.removeCallbacks(it) }
-        imeCheckRunnable = null
-        imeSeen = false
+        pendingKeyboardRequest = false
+        imeBottomPx = 0
+        try {
+            unregisterInputBack?.invoke()
+        } catch (_: RuntimeException) {
+            // The dispatcher may already have detached with the window.
+        } finally {
+            unregisterInputBack = null
+        }
         try {
             val view = inputView
             view?.clearFocus()
@@ -393,8 +445,6 @@ internal class BubblePreviewWindow(
     /** Hides the root before the bounded removal attempt, so no touch/visual leak remains. */
     fun hideForCleanup() {
         releaseInputFocus()
-        imeCheckRunnable?.let { root.removeCallbacks(it) }
-        imeCheckRunnable = null
         destroyedForCleanup = true
         closingForUser = false
         exitRunnable?.let { root.removeCallbacks(it) }
@@ -409,6 +459,7 @@ internal class BubblePreviewWindow(
         chipView = null
         inputView = null
         sendView = null
+        primaryReplyAction = null
         tailView = null
     }
 
@@ -453,9 +504,6 @@ internal class BubblePreviewWindow(
             built,
             FrameLayout.LayoutParams(plan.windowWidthPx, plan.windowHeightPx),
         )
-        root.setOnClickListener {
-            if (mode == SpeechBubbleMode.REPLY) onRecord()
-        }
         layoutVisual(animate = false)
         if (animate && animationsEnabled()) {
             try {
@@ -466,7 +514,6 @@ internal class BubblePreviewWindow(
                 built.clearAnimation()
             }
         }
-        root.contentDescription = rootDescription()
     }
 
     private fun layoutVisual(animate: Boolean) {
@@ -480,9 +527,7 @@ internal class BubblePreviewWindow(
                 topMargin = body.top
             }
         }
-        (tailView?.parent as? android.view.ViewGroup)?.removeView(tailView)
-        tailView = null
-        addTailView()
+        positionTail()
         if (animate && animationsEnabled()) {
             contentView?.startAnimation(
                 AnimationUtils.loadAnimation(root.context, R.anim.bf_speech_exit),
@@ -500,17 +545,12 @@ internal class BubblePreviewWindow(
         } else {
             0
         }
-        val actions = if (mode == SpeechBubbleMode.REPLY && plan.showActions) {
-            plan.actionRowPx
-        } else {
-            0
-        }
         val left = if (side == BubblePreviewSide.LEFT) tailShort else 0
         val right = plan.windowWidthPx -
             if (side == BubblePreviewSide.RIGHT) tailShort else 0
         val topReserve = if (side == BubblePreviewSide.BELOW) tailShort else 0
         val bottomReserve = if (side == BubblePreviewSide.ABOVE) tailShort else 0
-        val top = chipHeight + gap + actions + topReserve
+        val top = chipHeight + gap + topReserve
         val bottom = plan.windowHeightPx - bottomReserve
         return BodyRect(left, top.coerceAtLeast(0), max(left + 1, right), max(top + 1, bottom))
     }
@@ -520,20 +560,16 @@ internal class BubblePreviewWindow(
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(
-                plan.padHorizontalPx.roundToInt(),
-                plan.padVerticalPx.roundToInt(),
-                plan.padHorizontalPx.roundToInt(),
-                plan.padVerticalPx.roundToInt(),
-            )
-            background = speechDrawable(
-                R.drawable.bf_speech_input_body,
-                inputFill,
-                inputStroke,
-                plan.cornerRadiusPx,
-            )
         }
-        val edit = EditText(context).apply {
+        val edit = object : EditText(context) {
+            override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
+                if (keyCode == KeyEvent.KEYCODE_BACK && imeBottomPx == 0) {
+                    if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) requestUserClose()
+                    return true
+                }
+                return super.onKeyPreIme(keyCode, event)
+            }
+        }.apply {
             background = null
             setTextColor(inputText)
             setHintTextColor(inputHint)
@@ -543,13 +579,15 @@ internal class BubblePreviewWindow(
             inputType = InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
             maxLines = plan.bodyLines.coerceAtLeast(1)
             minLines = 1
             isSingleLine = false
             ellipsize = null
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             isSaveEnabled = false
-            setPadding(0, 0, dp(4), 0)
+            filters = arrayOf(InputFilter.LengthFilter(ChatDraftState.MAX_DRAFT_CHARS))
+            setPadding(dp(2), 0, dp(4), 0)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
         }
         inputView = edit
@@ -574,12 +612,13 @@ internal class BubblePreviewWindow(
             setColorFilter(iconColor)
             contentDescription = context.getString(R.string.bf_speech_expand_cd)
             background = ContextCompat.getDrawable(context, R.drawable.bf_speech_btn_expand_bg)
+                ?.let { InsetDrawable(it, dp(5)) }
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             isClickable = true
-            isFocusable = false
+            isFocusable = true
             setPadding(dp(10), dp(10), dp(10), dp(10))
             layoutParams = LinearLayout.LayoutParams(touchPx(), touchPx()).apply {
-                leftMargin = dp(4)
+                marginStart = dp(4)
             }
             setOnClickListener {
                 onInputExpand(edit.text?.toString().orEmpty())
@@ -601,14 +640,15 @@ internal class BubblePreviewWindow(
             )
             includeFontPadding = false
             background = ContextCompat.getDrawable(context, R.drawable.bf_speech_btn_send)
+                ?.let { InsetDrawable(it, 0, dp(5), 0, dp(5)) }
             isClickable = true
-            isFocusable = false
+            isFocusable = true
             minWidth = touchPx()
             minHeight = touchPx()
             layoutParams = LinearLayout.LayoutParams(
                 max(touchPx(), dp(52)),
                 touchPx(),
-            ).apply { leftMargin = dp(4) }
+            ).apply { marginStart = dp(4) }
             isEnabled = input?.sendEnabled == true
             setOnClickListener {
                 val text = edit.text?.toString().orEmpty()
@@ -619,8 +659,22 @@ internal class BubblePreviewWindow(
         row.addView(send)
 
         bodyContainer = row
+        styleInputRow()
         frame.addView(row)
         return frame
+    }
+
+    private fun styleInputRow() {
+        val row = bodyContainer ?: return
+        val horizontal = plan.padHorizontalPx.roundToInt()
+        val vertical = plan.padVerticalPx.roundToInt()
+        row.setPadding(horizontal, vertical, horizontal, vertical)
+        row.background = speechDrawable(
+            R.drawable.bf_speech_input_body,
+            inputFill,
+            inputStroke,
+            plan.cornerRadiusPx,
+        )
     }
 
     private fun buildReplyFace(context: Context): FrameLayout {
@@ -658,6 +712,7 @@ internal class BubblePreviewWindow(
             if (snapshot?.visibleState == BubbleVisibleState.THINKING) {
                 val dots = ImageView(context).apply {
                     scaleType = ImageView.ScaleType.FIT_XY
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     layoutParams = LinearLayout.LayoutParams(
                         dp(15),
                         dp(3),
@@ -670,6 +725,9 @@ internal class BubblePreviewWindow(
             frame.addView(body)
         }
         if (plan.includeUserSummary) {
+            val actionWidth = if (plan.showActions) 2 * touchPx() else 0
+            val availableWidth = (plan.windowWidthPx - actionWidth).coerceAtLeast(1)
+            val chipWidth = min(plan.chipWidthPx.coerceAtLeast(1), availableWidth)
             val chip = TextView(context).apply {
                 text = content?.userSummary.orEmpty()
                 maxLines = 1
@@ -688,11 +746,10 @@ internal class BubblePreviewWindow(
                     14f * (plan.speechScale / 0.85f) * density,
                 )
                 layoutParams = FrameLayout.LayoutParams(
-                    min(plan.chipWidthPx.coerceAtLeast(1), plan.windowWidthPx),
+                    chipWidth,
                     plan.chipHeightPx.coerceAtLeast(1),
                 ).apply {
-                    leftMargin = plan.windowWidthPx -
-                        min(plan.chipWidthPx.coerceAtLeast(1), plan.windowWidthPx)
+                    leftMargin = availableWidth - chipWidth
                     topMargin = 0
                 }
                 setOnClickListener { onRecord() }
@@ -705,28 +762,39 @@ internal class BubblePreviewWindow(
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL or Gravity.END
                 layoutParams = FrameLayout.LayoutParams(
-                    dp(INPUT_MIN_TOUCH_DP * 2),
+                    touchPx() * 2,
                     plan.actionRowPx.coerceAtLeast(1),
                 ).apply {
-                    leftMargin = plan.windowWidthPx - dp(INPUT_MIN_TOUCH_DP * 2)
-                    topMargin = plan.chipHeightPx + ceil(plan.zoneGapPx.toDouble()).toInt()
+                    leftMargin = plan.windowWidthPx - touchPx() * 2
                 }
             }
-            val stop = actionIcon(
+            val primary = actionIcon(
                 context,
-                R.drawable.bf_speech_ic_stop,
-                R.string.bf_speech_stop_cd,
-            ) { onStop() }
+                R.drawable.bf_speech_ic_expand,
+                R.string.bf_speech_full_chat_cd,
+            ) { if (canStopReply()) onStop() else onExpand() }
+            primaryReplyAction = primary
+            updateReplyAction()
             val close = actionIcon(
                 context,
                 R.drawable.bf_speech_ic_close,
                 R.string.bf_speech_close_cd,
             ) { requestUserClose() }
-            actions.addView(stop, LinearLayout.LayoutParams(touchPx(), touchPx()))
+            actions.addView(primary, LinearLayout.LayoutParams(touchPx(), touchPx()))
             actions.addView(close, LinearLayout.LayoutParams(touchPx(), touchPx()))
             frame.addView(actions)
         }
-        frame.setOnClickListener { onRecord() }
+        bodyContainer?.apply {
+            isFocusable = true
+            setOnClickListener { onRecord() }
+            ViewCompat.addAccessibilityAction(
+                this,
+                context.getString(R.string.bf_speech_expand_cd),
+            ) { _, _ ->
+                onRecord()
+                true
+            }
+        }
         return frame
     }
 
@@ -742,13 +810,18 @@ internal class BubblePreviewWindow(
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         setPadding(dp(12), dp(12), dp(12), dp(12))
         isClickable = true
-        isFocusable = false
+        isFocusable = true
+        background = ContextCompat.getDrawable(context, R.drawable.bf_speech_btn_expand_bg)
+            ?.let { InsetDrawable(it, dp(5)) }
         setOnClickListener { action() }
     }
 
-    private fun addTailView() {
-        if (plan.tailBudgetPx <= 0f) return
-        if (mode == SpeechBubbleMode.REPLY && !plan.showReplyBody) return
+    private fun positionTail() {
+        if (plan.tailBudgetPx <= 0f || mode == SpeechBubbleMode.REPLY && !plan.showReplyBody) {
+            (tailView?.parent as? FrameLayout)?.removeView(tailView)
+            tailView = null
+            return
+        }
         val direction = tailDirectionFor(side)
         val body = bodyRect()
         val k = plan.speechScale / 0.85f
@@ -768,28 +841,52 @@ internal class BubblePreviewWindow(
         }
         val x: Int
         val y: Int
-        val bodyCenterX = (body.left + body.right) / 2 - width / 2
-        val bodyCenterY = (body.top + body.bottom) / 2 - height / 2
+        val localAnchorX = anchor?.x?.minus(displayLeft + appliedX)
+        val localAnchorY = anchor?.y?.minus(displayTop + appliedY)
+        val edgePadding = (plan.cornerRadiusPx * 0.65f).roundToInt()
+        fun alongEdge(point: Float?, start: Int, end: Int, size: Int): Int {
+            val middle = (start + end - size) / 2
+            val min = start + edgePadding
+            val max = end - edgePadding - size
+            return if (max < min || point == null) middle
+            else (point.roundToInt() - size / 2).coerceIn(min, max)
+        }
         when (direction) {
             BubblePreviewTailDirection.DOWN -> {
-                x = bodyCenterX
+                x = alongEdge(localAnchorX, body.left, body.right, width)
                 y = body.bottom - dp(1)
             }
             BubblePreviewTailDirection.UP -> {
-                x = bodyCenterX
+                x = alongEdge(localAnchorX, body.left, body.right, width)
                 y = body.top - height + dp(1)
             }
             BubblePreviewTailDirection.LEFT -> {
                 x = body.left - width + dp(1)
-                y = bodyCenterY
+                y = alongEdge(localAnchorY, body.top, body.bottom, height)
             }
             BubblePreviewTailDirection.RIGHT -> {
                 x = body.right - dp(1)
-                y = bodyCenterY
+                y = alongEdge(localAnchorY, body.top, body.bottom, height)
             }
             BubblePreviewTailDirection.NONE -> return
         }
-        val view: View = if (usePackReply) {
+        val parent = contentView as? FrameLayout ?: return
+        val existing = tailView
+        if (existing != null && existing.tag == direction) {
+            val layout = existing.layoutParams as FrameLayout.LayoutParams
+            if (layout.leftMargin != x || layout.topMargin != y ||
+                layout.width != width || layout.height != height
+            ) {
+                layout.width = width
+                layout.height = height
+                layout.leftMargin = x
+                layout.topMargin = y
+                existing.layoutParams = layout
+            }
+            return
+        }
+        if (existing != null) parent.removeView(existing)
+        val view: View = if (mode == SpeechBubbleMode.REPLY && usePackReply) {
             BubbleTailView(
                 context = root.context,
                 direction = direction,
@@ -804,7 +901,7 @@ internal class BubblePreviewWindow(
             }
         }
         tailView = view
-        val parent = contentView as? FrameLayout ?: return
+        view.tag = direction
         parent.addView(
             view,
             FrameLayout.LayoutParams(width, height).apply {
@@ -833,10 +930,23 @@ internal class BubblePreviewWindow(
 
     private fun updateWindow() {
         if (!added || destroyedForCleanup) return
+        val maxInputY = if (mode == SpeechBubbleMode.INPUT && imeBottomPx > 0) {
+            displayHeight - imeBottomPx - plan.windowHeightPx - dp(12)
+        } else {
+            appliedY
+        }
+        if (maxInputY < dp(12) && mode == SpeechBubbleMode.INPUT && imeBottomPx > 0) {
+            if (!imeFailureNotified) {
+                imeFailureNotified = true
+                onInputNoSpace()
+            }
+            return
+        }
+        params.y = min(appliedY, maxInputY)
         try {
             windowManager.updateViewLayout(root, params)
         } catch (error: Exception) {
-            onInputNoSpace()
+            if (mode == SpeechBubbleMode.INPUT) onInputNoSpace() else throw error
         }
     }
 
@@ -848,7 +958,22 @@ internal class BubblePreviewWindow(
             updateThinkingDots()
         }
         chipView?.text = snapshot.userSummary
-        root.contentDescription = rootDescription()
+        updateReplyAction()
+    }
+
+    private fun canStopReply(): Boolean =
+        content?.phase == BubbleTurnPhase.THINKING || content?.phase == BubbleTurnPhase.STREAMING
+
+    private fun updateReplyAction() {
+        val action = primaryReplyAction ?: return
+        val description = action.context.getString(
+            if (canStopReply()) R.string.bf_speech_stop_cd else R.string.bf_speech_full_chat_cd,
+        )
+        if (action.contentDescription == description) return
+        action.contentDescription = description
+        action.setImageResource(
+            if (canStopReply()) R.drawable.bf_speech_ic_stop else R.drawable.bf_speech_ic_expand,
+        )
     }
 
     private fun updateInputViews() {
@@ -864,7 +989,6 @@ internal class BubblePreviewWindow(
             }
         }
         sendView?.isEnabled = state.sendEnabled
-        root.contentDescription = rootDescription()
     }
 
     private fun applyBodyDecoration() {
@@ -966,25 +1090,21 @@ internal class BubblePreviewWindow(
         }
         if (state == BubbleVisibleState.ERROR || snapshot.phase == BubbleTurnPhase.FAILED) {
             val failure = root.context.getString(R.string.bf_speech_error)
-            return if (visible.isBlank()) failure else visible + "\n" + failure
+            if (visible.isBlank()) return failureText.ifBlank { failure }
+            return "$failure\n$visible"
         }
         if (snapshot.status == BubbleTurnStatus.STOPPED ||
             snapshot.phase == BubbleTurnPhase.STOPPED
         ) {
             val stopped = root.context.getString(R.string.bf_speech_stopped)
-            return if (visible.isBlank()) stopped else visible + "\n" + stopped
+            return if (visible.isBlank()) stopped else "$stopped\n$visible"
         }
-        if ((snapshot.hasMore || snapshot.overflow) &&
+        if (snapshot.overflow &&
             visible.isNotBlank() && !visible.endsWith("…")
         ) {
             return visible + "…"
         }
         return visible
-    }
-
-    private fun rootDescription(): String = when (mode) {
-        SpeechBubbleMode.INPUT -> root.context.getString(R.string.bf_speech_hint)
-        SpeechBubbleMode.REPLY -> root.context.getString(R.string.bf_speech_expand_cd)
     }
 
     private fun replyDrawable(): Drawable {
@@ -1028,9 +1148,7 @@ internal class BubblePreviewWindow(
         try {
             ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
                 if (mode == SpeechBubbleMode.INPUT && added && !destroyedForCleanup) {
-                    val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-                    val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
-                    clampInputAboveIme(ime, visible)
+                    refreshInputImeInset(insets)
                 }
                 insets
             }
@@ -1040,51 +1158,31 @@ internal class BubblePreviewWindow(
         }
     }
 
-    /**
-     * Uses the attached root's real IME inset, never a guessed keyboard height.
-     * If the compact input balloon cannot fit above the keyboard, notify the
-     * host once so it can open the record panel instead of pressing send under
-     * the keyboard or retrying window geometry in a loop.
-     */
-    private fun clampInputAboveIme(imeBottomPx: Int, visible: Boolean) {
-        if (!visible || imeBottomPx <= 0) return
-        imeSeen = true
-        imeCheckRunnable?.let { root.removeCallbacks(it) }
-        imeCheckRunnable = null
-        if (imeFailureNotified) return
-        val margin = dp(12)
-        val visibleBottom = displayHeight - imeBottomPx
-        val maxY = visibleBottom - plan.windowHeightPx - margin
-        if (maxY < margin) {
-            imeFailureNotified = true
-            onInputNoSpace()
-            return
-        }
-        if (params.y > maxY) {
-            params.y = maxY
+    private fun refreshInputImeInset(
+        localInsets: WindowInsetsCompat? = ViewCompat.getRootWindowInsets(root),
+    ) {
+        val displayBottom = displayTop + displayHeight
+        val bottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // A compact overlay may receive no local IME overlap once it moves
+            // above the keyboard. Keep using display-relative insets.
             try {
-                windowManager.updateViewLayout(root, params)
-            } catch (error: Exception) {
-                imeFailureNotified = true
-                onInputNoSpace()
+                windowManager.currentWindowMetrics.windowInsets.getInsets(WindowInsets.Type.ime()).bottom
+            } catch (_: RuntimeException) {
+                localInsets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+            }
+        } else {
+            root.getWindowVisibleDisplayFrame(visibleDisplayFrame)
+            if (localInsets?.isVisible(WindowInsetsCompat.Type.ime()) == true &&
+                visibleDisplayFrame.bottom in (displayTop + 1)..displayBottom
+            ) {
+                displayBottom - visibleDisplayFrame.bottom
+            } else {
+                0
             }
         }
-    }
-
-    /**
-     * No trusted IME inset and no keyboard after the explicit show request means
-     * the keyboard path failed. Notify once so the host opens the record panel
-     * rather than leaving a dead input balloon.
-     */
-    private fun scheduleImeFailureCheck() {
-        imeCheckRunnable?.let { root.removeCallbacks(it) }
-        val runnable = Runnable {
-            imeCheckRunnable = null
-            if (destroyedForCleanup || mode != SpeechBubbleMode.INPUT) return@Runnable
-            if (!imeSeen) onInputNoSpace()
-        }
-        imeCheckRunnable = runnable
-        root.postDelayed(runnable, IME_FAILURE_CHECK_MILLIS)
+        if (this.imeBottomPx == bottom) return
+        this.imeBottomPx = bottom
+        updateWindow()
     }
 
     private fun touchPx(): Int = ceil(resourceDp(R.dimen.bf_speech_action_min))

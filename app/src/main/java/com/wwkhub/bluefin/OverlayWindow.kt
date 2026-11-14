@@ -95,7 +95,7 @@ internal class OverlayWindow(
     private val orbButton: View
     private val orbPanel: View
     private val chatPanel: View
-    private val chatMessages: android.widget.LinearLayout
+    private val chatTranscript: ChatTranscriptView
     private val chatScroll: android.widget.ScrollView
     private val chatInput: android.widget.EditText
     private val chatSend: View
@@ -176,6 +176,7 @@ internal class OverlayWindow(
     private var bubbleInsetsEpoch: Runnable? = null
     private var bubbleAppVisibilityInstalled = false
     private var bubbleAppVisibilityListener: OverlayAppVisibility.Listener? = null
+    private val chatVisibilityListener = OverlayAppVisibility.Listener { updateChatVisibility(it) }
     private var bubbleDraftWatcherInstalled = false
     private var bubbleInputToken = 0L
     private var bubbleInputPending = false
@@ -226,8 +227,12 @@ internal class OverlayWindow(
         orbButton = orbRoot.findViewById(R.id.overlay_orb_button)
         orbPanel = orbRoot.findViewById(R.id.overlay_orb_panel)
         chatPanel = orbRoot.findViewById(R.id.overlay_chat_panel)
-        chatMessages = orbRoot.findViewById(R.id.overlay_chat_messages)
         chatScroll = orbRoot.findViewById(R.id.overlay_chat_scroll)
+        chatTranscript = ChatTranscriptView(
+            chatScroll,
+            orbRoot.findViewById(R.id.overlay_chat_messages),
+            inOverlay = true,
+        )
         chatInput = orbRoot.findViewById(R.id.overlay_chat_input)
         chatSend = orbRoot.findViewById(R.id.overlay_chat_send)
         chatStop = orbRoot.findViewById(R.id.overlay_chat_stop)
@@ -243,6 +248,8 @@ internal class OverlayWindow(
         setupWebView()
         setupHit()
         setupOrb()
+        OverlayAppVisibility.addChatVisibilityListener(chatVisibilityListener)
+        updateChatVisibility(OverlayAppVisibility.chatVisible)
         root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) = Unit
             override fun onViewDetachedFromWindow(v: View) {
@@ -285,6 +292,9 @@ internal class OverlayWindow(
         } catch (error: Exception) {
             Log.w(TAG, "optional bubble close contained type=${error.javaClass.name}")
         } finally {
+            ScreenAwareness.onOverlayReply = null
+            ScreenAwareness.hideOverlayForCapture = null
+            OverlayAppVisibility.removeChatVisibilityListener(chatVisibilityListener)
             if (bubble?.hasUnresolvedCleanup() != true) bubblePreview = null
             chatSession?.stop()
             chatListener?.let { listener -> chatSession?.removeListener(listener) }
@@ -358,18 +368,20 @@ internal class OverlayWindow(
     private fun cheapPackKey(): String {
         val id = currentIdFromPrefs()
         currentPackId = id
-        val scheme = if (id == PackFormat.BUILT_IN_ID) "" else storedScheme(id)
+        val scheme = storedScheme(id)
         return "$id|$scheme"
     }
 
     private fun cheapStageUrl(): String {
         val id = currentPackId
-        if (id == PackFormat.BUILT_IN_ID) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        val scheme = storedScheme(id)
+        if (id == PackFormat.BUILT_IN_ID && scheme.isEmpty()) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        if (PackRepository.hasBundledAsset(appContext, id)) return PreviewEntry.packHostUrl(id, scheme, bundled = true)
         val dir = File(PackRepository.packRoot(appContext), id)
         if (!File(dir, PackImportEngine.MANIFEST_FILE).isFile) {
             return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
         }
-        return PreviewEntry.packHostUrl(id, storedScheme(id))
+        return PreviewEntry.packHostUrl(id, scheme)
     }
 
     private fun currentIdFromPrefs(): String =
@@ -388,7 +400,9 @@ internal class OverlayWindow(
         val appearance = resolved.appearance
         currentPackId = appearance.id
         currentManifest = appearance.manifest
-        val scheme = if (appearance.builtIn) "" else storedScheme(appearance.id)
+        val scheme = if (appearance.id == PackFormat.BUILT_IN_ID) {
+            PackRepository.readScheme(appContext, appearance.manifest)
+        } else storedScheme(appearance.id)
         val key = appearance.id + "|" + scheme
         if (key == loadedPackKey) return
         // If the first page is still loading, leave the old key in place so the
@@ -402,11 +416,9 @@ internal class OverlayWindow(
     }
 
     private fun stageUrlFor(appearance: PackAppearance): String {
-        if (appearance.builtIn) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
-        return PreviewEntry.packHostUrl(
-            appearance.id,
-            PackRepository.readScheme(appContext, appearance.manifest),
-        )
+        val scheme = PackRepository.readScheme(appContext, appearance.manifest)
+        if (appearance.id == PackFormat.BUILT_IN_ID && scheme.isEmpty()) return PreviewEntry.urlFor(PreviewEntry.ROUTE_B)
+        return PreviewEntry.packHostUrl(appearance.id, scheme, appearance.builtIn)
     }
 
     @SuppressLint("InflateParams")
@@ -507,7 +519,8 @@ internal class OverlayWindow(
             (currentManifest?.canWalk != false)
         val hidden = prefs().getBoolean(BluefinStore.KEY_HIDDEN, false)
         val scale = OverlayPetPolicy.scaleFor(BluefinStore.readScale(prefs()))
-        val opacity = BluefinStore.readOpacity(prefs())
+        val requestedOpacity = BluefinStore.readOpacity(prefs())
+        val opacity = OverlayLayout.effectivePetOpacity(requestedOpacity, params.alpha)
         petHiddenForBubble = hidden
         petOpacityForBubble = opacity
         if (hidden || opacity <= 0f) {
@@ -518,7 +531,7 @@ internal class OverlayWindow(
             }
         }
         val scaleJs = String.format(Locale.US, "%.2f", scale)
-        val opacityJs = String.format(Locale.US, "%.2f", opacity)
+        val opacityJs = OverlayLayout.characterOpacity(requestedOpacity, params.alpha).toString()
         web.evaluateJavascript(
             "window.__bluefinNative&&window.__bluefinNative.applyPrefs($roam,$scaleJs,$hidden,$opacityJs)",
             null,
@@ -597,6 +610,7 @@ internal class OverlayWindow(
             }
         }
         orbButton.setOnTouchListener { _, event ->
+            BluefinMotion.orbTouch(orbButton, event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     orbDragging = true
@@ -668,8 +682,17 @@ internal class OverlayWindow(
     }
 
     private fun addOrbPanelListeners() {
+        bindScreenAwareness()
         orbPanel.findViewById<View>(R.id.overlay_open_chat).setOnClickListener {
             openSpeechEntry()
+        }
+        orbPanel.findViewById<View>(R.id.overlay_look_screen).setOnClickListener {
+            collapseOrb()
+            ScreenAwarenessActivity.look(appContext, overlay = true)
+        }
+        orbPanel.findViewById<View>(R.id.overlay_screen_settings).setOnClickListener {
+            collapseOrb()
+            appContext.startActivity(ScreenAwarenessActivity.settingsIntent(appContext, overlay = true))
         }
         orbPanel.findViewById<View>(R.id.overlay_change_character).setOnClickListener {
             collapseOrb()
@@ -693,13 +716,11 @@ internal class OverlayWindow(
         })
 
         val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
-        val opacityValue = orbPanel.findViewById<TextView>(R.id.overlay_opacity_value)
         opacitySlider.max = 100
         opacitySlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (orbSyncing) return
                 val opacity = BluefinStore.progressToOpacity(progress)
-                opacityValue.text = "${(opacity * 100).roundToInt()}%"
                 BluefinStore.writeOpacity(prefs(), opacity)
                 pushPrefs()
             }
@@ -772,6 +793,27 @@ internal class OverlayWindow(
         }
     }
 
+    private fun bindScreenAwareness() {
+        ScreenAwareness.onOverlayReply = { prompt, snapshot ->
+            if (bubbleRestoreAllowed()) {
+                chatSession = ChatSession.shared(appContext)
+                scheduleBubblePreviewAfterStarted(
+                    userSummary = bubbleSummary(prompt),
+                    acceptedGeneration = snapshot.requestGeneration,
+                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
+                )
+                true
+            } else false
+        }
+        ScreenAwareness.hideOverlayForCapture = { hide ->
+            val visibility = if (hide) View.INVISIBLE else View.VISIBLE
+            root.visibility = visibility
+            orbRoot.visibility = visibility
+            hit.visibility = visibility
+            if (hide) dismissBubblePreview()
+        }
+    }
+
     private fun refreshOrbControls() {
         if (destroyed) return
         val scale = BluefinStore.readScale(prefs())
@@ -787,8 +829,12 @@ internal class OverlayWindow(
             val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
             opacitySlider.max = 100
             opacitySlider.progress = BluefinStore.opacityToProgress(opacity)
-            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text =
-                "${(opacity * 100).roundToInt()}%"
+            val effective = OverlayLayout.effectivePetOpacity(opacity, params.alpha)
+            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text = if (effective < opacity) {
+                uiContext.getString(R.string.overlay_opacity_limited, (effective * 100).roundToInt())
+            } else {
+                "${(effective * 100).roundToInt()}%"
+            }
             val orbSizeSlider = orbPanel.findViewById<SeekBar>(R.id.overlay_orb_size_slider)
             orbSizeSlider.max = 28
             orbSizeSlider.progress = BluefinStore.orbSizeToProgress(orbSizeDp)
@@ -841,7 +887,7 @@ internal class OverlayWindow(
         if (words.isEmpty()) {
             grid.addView(TextView(themedContext).apply {
                 text = getString(R.string.import_no_actions)
-                setTextColor(android.graphics.Color.parseColor("#D9E8F8"))
+                setTextColor(themedContext.getColor(R.color.blue_deep))
                 textSize = 12f
                 setPadding(dp(4), dp(4), dp(4), dp(4))
             })
@@ -858,10 +904,10 @@ internal class OverlayWindow(
                 textSize = 13f
                 isAllCaps = false
                 minWidth = 0
-                minHeight = dp(36)
+                minHeight = dp(48)
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(android.graphics.Color.WHITE)
+                setTextColor(themedContext.getColor(R.color.blue_deep))
                 setPadding(dp(2), 0, dp(2), 0)
                 setOnClickListener {
                     if (word == "walk" && !canWalk) {
@@ -894,10 +940,9 @@ internal class OverlayWindow(
         orbExpanded = true
         chatExpanded = false
         layoutOrb()
-        orbPanel.animate().cancel()
-        orbPanel.translationX = if (orbSideRight) dp(24).toFloat() else -dp(24).toFloat()
-        orbPanel.alpha = 0f
-        orbPanel.animate().translationX(0f).alpha(1f).setDuration(160).start()
+        orbPanel.pivotX = if (orbSideRight) orbPanel.layoutParams.width.toFloat() else 0f
+        orbPanel.pivotY = 0f
+        BluefinMotion.enter(orbPanel, x = dp(if (orbSideRight) 16 else -16).toFloat(), scale = 0.985f)
         Log.i(TAG, "orb expanded")
     }
 
@@ -909,9 +954,13 @@ internal class OverlayWindow(
         orbPanel.animate().cancel()
         chatPanel.animate().cancel()
         orbPanel.translationX = 0f
+        orbPanel.scaleX = 1f
+        orbPanel.scaleY = 1f
         orbPanel.alpha = 1f
         orbPanel.visibility = View.GONE
         chatPanel.translationX = 0f
+        chatPanel.scaleX = 1f
+        chatPanel.scaleY = 1f
         chatPanel.alpha = 1f
         chatPanel.visibility = View.GONE
         hideOrbUnconfiguredPrompt()
@@ -947,10 +996,7 @@ internal class OverlayWindow(
         setOrbFocusable(true)
         renderChat(session.snapshot())
         bindLatestDraft()
-        chatPanel.animate().cancel()
-        chatPanel.translationX = if (orbSideRight) dp(24).toFloat() else -dp(24).toFloat()
-        chatPanel.alpha = 0f
-        chatPanel.animate().translationX(0f).alpha(1f).setDuration(160).start()
+        BluefinMotion.enter(chatPanel, x = dp(if (orbSideRight) 12 else -12).toFloat())
         if (requestInput) {
             chatInput.requestFocus()
             showPanelIme()
@@ -970,6 +1016,10 @@ internal class OverlayWindow(
     private fun openSpeechEntry() {
         if (!ModelEndpointStore.isReady(appContext)) {
             showOrbUnconfiguredPrompt()
+            return
+        }
+        if (ChatSession.peek()?.snapshot()?.workerBusy == true) {
+            openChatPanel(requestInput = false)
             return
         }
         if (clickThrough) {
@@ -1153,20 +1203,25 @@ internal class OverlayWindow(
         }
         ChatDraft.state.edit(text)
         val capture = ChatDraft.state.captureSend()
+        if (ScreenAwareness.isLookCommand(text)) {
+            dismissBubblePreview()
+            ScreenAwarenessActivity.look(appContext, capture, overlay = true)
+            return
+        }
         val outcome = when (session.send(text)) {
             ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
             ChatSendResult.EMPTY -> ChatDraftSendOutcome.EMPTY
             ChatSendResult.BUSY -> ChatDraftSendOutcome.BUSY
             ChatSendResult.NOT_CONFIGURED -> ChatDraftSendOutcome.NOT_CONFIGURED
         }
-        val latest = ChatDraft.state.onSendOutcome(capture, outcome)
+        ChatDraft.state.onSendOutcome(capture, outcome)
         when (outcome) {
             ChatDraftSendOutcome.STARTED -> {
                 val snapshot = session.snapshot()
                 val replyToken = ++bubbleRequestToken
                 bubbleSignalToken = replyToken
                 bubbleSignalGeneration = snapshot.requestGeneration
-                bubbleSignalUserIndex = snapshot.lines.lastIndex
+                bubbleSignalUserIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER }
                 bubbleInputToken = 0L
                 bubbleInputPending = false
                 bubbleAwaitingAttachToken = null
@@ -1264,6 +1319,11 @@ internal class OverlayWindow(
             updateSendState()
             return
         }
+        if (ScreenAwareness.isLookCommand(text)) {
+            collapseOrb()
+            ScreenAwarenessActivity.look(appContext, capture, overlay = true)
+            return
+        }
         val outcome = when (session.send(text)) {
             ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
             ChatSendResult.EMPTY -> ChatDraftSendOutcome.EMPTY
@@ -1278,7 +1338,7 @@ internal class OverlayWindow(
                 scheduleBubblePreviewAfterStarted(
                     userSummary = bubbleSummary(text),
                     acceptedGeneration = snapshot.requestGeneration,
-                    userIndex = snapshot.lines.lastIndex,
+                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
                 )
             }
             ChatDraftSendOutcome.NOT_CONFIGURED -> {
@@ -1413,57 +1473,7 @@ internal class OverlayWindow(
             snapshot.phase == ChatPhase.THINKING || snapshot.phase == ChatPhase.STREAMING
         chatSend.visibility = if (generating) View.GONE else View.VISIBLE
         chatStop.visibility = if (generating) View.VISIBLE else View.GONE
-        chatMessages.removeAllViews()
-        if (snapshot.lines.isEmpty() && !generating) {
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = getString(R.string.chat_empty)
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#B8CCE0"))
-                    setPadding(0, dp(12), 0, dp(8))
-                },
-            )
-        }
-        snapshot.lines.forEach { line ->
-            val assistant = line.role == ChatRole.ASSISTANT
-            val body = when {
-                line.stopped -> if (line.text.isBlank()) {
-                    getString(R.string.chat_stopped)
-                } else {
-                    line.text + "\n（${getString(R.string.chat_stopped)}）"
-                }
-                line.failed -> line.text + "\n（${getString(R.string.chat_failed)}）"
-                else -> line.text
-            }
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = body
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.WHITE)
-                    if (assistant) {
-                        setBackgroundResource(R.drawable.bg_chat_overlay_bubble)
-                        setPadding(dp(7), dp(5), dp(7), dp(5))
-                    } else {
-                        setPadding(dp(3), dp(3), dp(3), dp(3))
-                    }
-                    layoutParams = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(4) }
-                },
-            )
-        }
-        if (snapshot.phase == ChatPhase.THINKING) {
-            chatMessages.addView(
-                TextView(themedContext).apply {
-                    text = getString(R.string.chat_thinking)
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#B8CCE0"))
-                    setPadding(dp(4), dp(4), dp(4), dp(4))
-                },
-            )
-        }
-        chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+        chatTranscript.render(snapshot.lines, generating)
     }
 
     private fun loadOrbPosition() {
@@ -1627,6 +1637,7 @@ internal class OverlayWindow(
     }
 
     private fun placeHit(parsed: JSONObject) {
+        if (OverlayAppVisibility.chatVisible) return
         val hits = parsed.optJSONArray("hits")
         val hasHits = hits != null && hits.length() > 0
         if (!OverlayClickThroughPolicy.shouldAttachHit(clickThrough, hasHits)) {
@@ -1696,6 +1707,17 @@ internal class OverlayWindow(
         } finally {
             hitAttached = false
         }
+    }
+
+    private fun updateChatVisibility(chatVisible: Boolean) {
+        if (destroyed) return
+        if (chatVisible) {
+            collapseOrb()
+            dropHitWindow()
+        }
+        val visibility = if (chatVisible) View.INVISIBLE else View.VISIBLE
+        root.visibility = visibility
+        orbRoot.visibility = visibility
     }
 
     private fun moveHitWithFinger(rawX: Float, rawY: Float) {
@@ -1889,6 +1911,12 @@ internal class OverlayWindow(
             override fun onBubbleRecordRequested() {
                 postBubbleCallback("record", bubbleSignalToken) {
                     if (!destroyed && attached) openChatPanel(requestInput = false)
+                }
+            }
+
+            override fun onBubbleFullChatRequested() {
+                postBubbleCallback("full-chat", bubbleSignalToken) {
+                    if (!destroyed && attached) openFullChat()
                 }
             }
 
@@ -2238,7 +2266,7 @@ internal class OverlayWindow(
 
     private fun bubbleSignalPayload(snapshot: ChatSnapshot): BubbleSignalPayload {
         val userIndex = bubbleSignalUserIndex
-        val indexValid = userIndex >= 0 && userIndex < snapshot.lines.size + 1
+        val indexValid = snapshot.lines.getOrNull(userIndex)?.role == ChatRole.USER
         val assistant = if (indexValid) {
             snapshot.lines
                 .drop((userIndex + 1).coerceAtLeast(0))
@@ -2421,13 +2449,9 @@ internal class OverlayWindow(
                 val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
                 gate.onInsets(imeBottom, visible)
                 if (!knownBefore || stateBefore != gate.state || bottomBefore != gate.bottomPx) {
-                    // The cached snapshot may contain the previous IME edge.
-                    // Drop it and remove the live bubble immediately; the 100 ms
-                    // coalesced epoch only batches subsequent callbacks.
+                    // Drop stale keyboard bounds. The focused input window handles
+                    // its own IME insets without losing the editor or its focus.
                     invalidateBubbleScreenSnapshot()
-                    bubblePreview?.let { controller ->
-                        runBubbleHostCallback("insets") { controller.onHostInsetsChanged() }
-                    }
                     scheduleBubbleInsetsEpoch()
                 }
                 insets
@@ -2449,7 +2473,7 @@ internal class OverlayWindow(
             // The display/bar basis is config-scoped; an IME epoch does not
             // change it, but the screen snapshot (IME edge) is already invalid.
             bubblePreview?.let { controller ->
-                runBubbleHostCallback("insets-epoch") { controller.onHostConfigurationChanged() }
+                runBubbleHostCallback("insets-epoch") { controller.onHostInsetsChanged() }
             }
         }
         bubbleInsetsEpoch = runnable

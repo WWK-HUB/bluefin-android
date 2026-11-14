@@ -252,24 +252,23 @@ class BubblePreviewStageDContractTest {
     }
 
     @Test
-    fun tailAndActionPlanReserveTheirOwnSpaceInsideTheCompactWindow() {
+    fun tailAndActionsFitInTheCompactWindowWithoutCoveringTheReply() {
         val window = source("src/main/java/$modulePath/BubblePreviewWindow.kt")
         val body = methodBody(window, "    private fun bodyRect(")
-        assertTrue(body.contains("plan.actionRowPx"))
         assertTrue(body.contains("plan.chipHeightPx"))
         assertTrue(body.contains("tailShort"))
         assertTrue(body.contains("BubblePreviewSide.ABOVE"))
         assertTrue(body.contains("BubblePreviewSide.BELOW"))
         assertTrue(body.contains("BubblePreviewSide.LEFT"))
         assertTrue(body.contains("BubblePreviewSide.RIGHT"))
-        val tail = methodBody(window, "    private fun addTailView(")
+        val tail = methodBody(window, "    private fun positionTail(")
         assertTrue(tail.contains("body.bottom - dp(1)"))
         assertTrue(tail.contains("body.top - height + dp(1)"))
         assertTrue(tail.contains("body.left - width + dp(1)"))
         assertTrue(tail.contains("body.right - dp(1)"))
-        assertTrue(tail.contains("bodyCenterX"))
         val actions = methodBody(window, "    private fun buildReplyFace(")
-        assertTrue(actions.contains("bf_speech_ic_stop"))
+        assertTrue(actions.contains("plan.windowWidthPx - actionWidth"))
+        assertTrue(actions.contains("if (canStopReply()) onStop() else onExpand()"))
         assertTrue(actions.contains("bf_speech_ic_close"))
         assertTrue(actions.contains("touchPx()"))
     }

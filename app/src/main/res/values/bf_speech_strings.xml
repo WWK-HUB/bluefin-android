@@ -7,6 +7,7 @@
     <string name="bf_speech_stopped">已停止</string>
     <string name="bf_speech_error">回复中断</string>
     <string name="bf_speech_expand_cd">打开记录</string>
+    <string name="bf_speech_full_chat_cd">在应用内查看完整对话</string>
     <string name="bf_speech_close_cd">关闭气泡</string>
     <string name="bf_speech_stop_cd">停止回复</string>
     <string name="bf_speech_send_disabled_cd">发送（请先输入）</string>

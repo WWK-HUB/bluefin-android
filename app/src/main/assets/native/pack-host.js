@@ -6,6 +6,7 @@ import * as kit from "../bluefin/kit/body.js";
 
 const params = new URLSearchParams(location.search);
 const packId = String(params.get("pack") || "");
+const bundled = params.get("bundled") === "1";
 const requestedScheme = String(params.get("scheme") || "");
 const stage = document.getElementById("stage");
 const root = document.getElementById("root");
@@ -89,6 +90,10 @@ const host = {
 };
 
 function packBase() {
+  if (bundled) {
+    const directory = packId === "bluefin-native" ? "bluefin" : "characters/" + encodeURIComponent(packId);
+    return new URL("/assets/" + directory + "/", location.origin);
+  }
   return new URL("/packs/" + encodeURIComponent(packId) + "/", location.origin);
 }
 
@@ -139,7 +144,7 @@ function tick(now) {
 }
 
 async function boot() {
-  if (!packId) throw new Error("缺少角色包编号");
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(packId)) throw new Error("角色包编号无效");
   const base = packBase();
   packBaseUrl = base;
   const response = await fetch(new URL("figure.json", base), { cache: "no-store" });
@@ -155,7 +160,7 @@ async function boot() {
   const scheme = requestedScheme || (Array.isArray(manifest.presets) && manifest.presets[0] && manifest.presets[0].id) ||
     (Array.isArray(manifest.axes) ? manifest.axes.map((axis) => axis.options && axis.options[0] && axis.options[0].id).filter(Boolean).join("-") : "");
   let model;
-  if (typeof manifest.model === "string" && /\.json$/i.test(manifest.model)) {
+  if (typeof manifest.model === "string") {
     try {
       model = await (await fetch(new URL(manifest.model.replace(/\\/g, "/"), base), { cache: "no-store" })).json();
     } catch (_) {

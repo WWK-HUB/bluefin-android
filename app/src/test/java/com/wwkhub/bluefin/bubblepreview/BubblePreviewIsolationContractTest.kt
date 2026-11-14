@@ -145,7 +145,7 @@ class BubblePreviewIsolationContractTest {
         assertTrue(start.contains("attachBubbleChatListener(session)"))
 
         val outsideModule = File("src/main/java").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" && !it.path.contains(modulePath) }
+            .filter { it.isFile && it.extension == "kt" && !it.invariantSeparatorsPath.contains(modulePath) }
             .toList()
         val constructorSites = outsideModule.filter { file ->
             file.readText().contains("BubblePreviewController(")
@@ -379,7 +379,7 @@ class BubblePreviewIsolationContractTest {
         assertTrue(layout.contains("@string/bubble_preview_help"))
         val strings = source("src/main/res/values/strings.xml")
         assertTrue(strings.contains(">对话气泡<"))
-        assertTrue(strings.contains("在角色旁预览本轮对话。点击穿透开启时不显示。"))
+        assertTrue(strings.contains("开启点击穿透时，可在「记录」里继续。"))
 
         val activity = source("src/main/java/com/wwkhub/bluefin/MainActivity.kt")
         assertFalse(activity.contains("BubblePreviewController("))

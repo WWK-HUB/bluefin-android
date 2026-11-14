@@ -35,7 +35,7 @@ internal data class SpeechBubbleScaleRequest(
  * of any host screen callback. The values mirror bf_speech_dimens/config and
  *方案 4.4: portrait input <= min(280dp, 72%), 1..3 lines; reply <= 4 lines;
  * stack <= min(220dp, 36%); landscape input 1 line, reply 2 lines, stack
- * <= min(160dp, 50%). Hot zones stay 44dp and never scale with the character.
+ * <= min(160dp, 50%). Touch targets stay at least 48dp.
  */
 internal object SpeechBubbleLayoutPolicy {
     const val BODY_BASE_SP = 11f
@@ -56,7 +56,7 @@ internal object SpeechBubbleLayoutPolicy {
     const val INPUT_MAX_LINES_LANDSCAPE = 1
     const val REPLY_MAX_LINES_PORTRAIT = 4
     const val REPLY_MAX_LINES_LANDSCAPE = 2
-    const val ACTION_TARGET_DP = 44f
+    const val ACTION_TARGET_DP = 48f
     const val INPUT_PAD_H_DP = 10f
     const val INPUT_PAD_V_DP = 4f
     const val REPLY_PAD_H_DP = 12f
@@ -149,7 +149,7 @@ internal object SpeechBubbleLayoutPolicy {
         val contentWidth = width - 2f * padH - tailShort
         if (contentWidth < actionRow) return emptyList()
         if (mode == SpeechBubbleMode.INPUT &&
-            contentWidth < 2f * actionRow + 8f * density
+            contentWidth < actionRow + max(actionRow.toFloat(), 52f * density) + 32f * density
         ) {
             return emptyList()
         }
@@ -182,7 +182,7 @@ internal object SpeechBubbleLayoutPolicy {
             }
             for (lines in lineCandidates) {
                 val bodyHeight = ceil(
-                    max(actionRow.toFloat(), 2f * padV + lines * bodyLine),
+                    2f * padV + max(actionRow.toFloat(), lines * bodyLine),
                 ).toInt().coerceAtLeast(1)
                 val height = bodyHeight + ceil(tailShort.toDouble()).toInt()
                 if (height <= heightCap) {
@@ -204,7 +204,6 @@ internal object SpeechBubbleLayoutPolicy {
                             bodyLine = bodyLine,
                             chipWidth = width,
                             chipHeight = 0,
-                            showActions = false,
                             showReplyBody = true,
                             includeUserSummary = false,
                             characterScaleForPlan = s,
@@ -237,7 +236,6 @@ internal object SpeechBubbleLayoutPolicy {
                         bodyLine = bodyLine,
                         chipWidth = min(width, chipWidth).coerceAtLeast(1),
                         chipHeight = chipHeight,
-                        showActions = false,
                         showReplyBody = false,
                         includeUserSummary = true,
                         characterScaleForPlan = s,
@@ -252,7 +250,8 @@ internal object SpeechBubbleLayoutPolicy {
         } else {
             REPLY_MAX_LINES_PORTRAIT
         }
-        val actions = request.visibleState == BubbleVisibleState.THINKING ||
+        val actions = width >= actionRow * 3
+        val canStop = request.visibleState == BubbleVisibleState.THINKING ||
             request.visibleState == BubbleVisibleState.TYPING
         val lineCandidates = buildList {
             add(maxLines)
@@ -261,8 +260,7 @@ internal object SpeechBubbleLayoutPolicy {
         }.distinct()
         for (lines in lineCandidates) {
             val bodyHeight = ceil(2f * padV + lines * bodyLine).toInt().coerceAtLeast(1)
-            val actionsHeight = if (actions) actionRow else 0
-            val height = chipHeight + ceil(gap.toDouble()).toInt() + actionsHeight +
+            val height = chipHeight + ceil(gap.toDouble()).toInt() +
                 bodyHeight + ceil(tailShort.toDouble()).toInt()
             if (height <= heightCap) {
                 result.add(
@@ -283,7 +281,14 @@ internal object SpeechBubbleLayoutPolicy {
                         bodyLine = bodyLine,
                         chipWidth = chipWidth,
                         chipHeight = chipHeight,
-                        showActions = actions,
+                        actions = if (actions) {
+                            listOf(
+                                if (canStop) BubblePreviewAction.STOP else BubblePreviewAction.VIEW_ALL,
+                                BubblePreviewAction.CLOSE,
+                            )
+                        } else {
+                            emptyList()
+                        },
                         showReplyBody = true,
                         includeUserSummary = true,
                         characterScaleForPlan = s,
@@ -311,7 +316,7 @@ internal object SpeechBubbleLayoutPolicy {
         bodyLine: Float,
         chipWidth: Int,
         chipHeight: Int,
-        showActions: Boolean,
+        actions: List<BubblePreviewAction> = emptyList(),
         showReplyBody: Boolean,
         includeUserSummary: Boolean,
         characterScaleForPlan: Float = 0.85f,
@@ -333,14 +338,10 @@ internal object SpeechBubbleLayoutPolicy {
         userLineHeightPx = bodyLine,
         contentWidthPx = contentWidth,
         tailBudgetPx = tailShort,
-        actionLabels = if (showActions) {
-            listOf(BubblePreviewAction.STOP, BubblePreviewAction.CLOSE)
-        } else {
-            emptyList()
-        },
+        actionLabels = actions,
         speechMode = mode,
         showReplyBody = showReplyBody,
-        showActions = showActions,
+        showActions = actions.isNotEmpty(),
         chipWidthPx = chipWidth,
         chipHeightPx = chipHeight,
         speechScale = characterScaleForPlan,

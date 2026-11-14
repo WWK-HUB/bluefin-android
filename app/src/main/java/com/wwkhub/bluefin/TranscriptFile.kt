@@ -35,13 +35,15 @@ internal object TranscriptFile {
                 val item = array.optJSONObject(i) ?: continue
                 val role = if (item.optString("role") == "assistant") ChatRole.ASSISTANT else ChatRole.USER
                 val text = item.optString("text")
-                if (text.isEmpty() && !item.optBoolean("stopped", false)) continue
+                val stopped = item.optBoolean("stopped", false)
+                val failed = item.optBoolean("failed", false)
+                if (text.isEmpty() && !stopped && !failed) continue
                 lines.add(
                     ChatLine(
                         role = role,
                         text = text,
-                        stopped = item.optBoolean("stopped", false),
-                        failed = item.optBoolean("failed", false),
+                        stopped = stopped,
+                        failed = failed,
                     ),
                 )
             }

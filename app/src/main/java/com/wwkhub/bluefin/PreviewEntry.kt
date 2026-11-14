@@ -7,8 +7,12 @@ object PreviewEntry {
     const val ROUTE_B = "bluefin/index.html"
     const val ROUTE_A = "www/bluefin-preview.html"
 
-    /** Host page for a user-imported Coopanion figure pack. */
+    /** Host page for a Coopanion figure pack. */
     const val PACK_HOST = "native/pack-host.html"
+    internal const val BUNDLED_PACKS = "characters"
+
+    internal fun bundledPackPath(id: String): String =
+        if (id == PackFormat.BUILT_IN_ID) "bluefin" else "$BUNDLED_PACKS/$id"
 
     /**
      * One-line entry switch, relative to `src/main/assets/`.
@@ -27,11 +31,11 @@ object PreviewEntry {
     fun urlFor(assetPath: String): String = "$HOST/assets/$assetPath"
 
     /**
-     * URL for the imported-pack host. The default built-in character never uses
-     * this helper, so [ROUTE_B] stays the default appearance.
+     * URL for the figure pack host. [ROUTE_B] remains the default for Bluefin
+     * when its manifest declares no appearance choices.
      */
-    fun packHostUrl(id: String, scheme: String? = null): String {
-        val base = urlFor(PACK_HOST) + "?pack=" + encodeQuery(id)
+    fun packHostUrl(id: String, scheme: String? = null, bundled: Boolean = false): String {
+        val base = urlFor(PACK_HOST) + "?pack=" + encodeQuery(id) + if (bundled) "&bundled=1" else ""
         val trimmed = scheme?.trim().orEmpty()
         return if (trimmed.isEmpty()) base else "$base&scheme=" + encodeQuery(trimmed)
     }

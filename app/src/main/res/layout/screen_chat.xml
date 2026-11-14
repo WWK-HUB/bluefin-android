@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/chat_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/stage"
+    android:background="@drawable/bg_bluefin_stage"
     android:orientation="vertical">
 
     <LinearLayout
@@ -11,9 +12,11 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
+        android:background="@color/paper"
         android:orientation="horizontal"
         android:paddingStart="8dp"
         android:paddingTop="8dp"
+        android:paddingBottom="3dp"
         android:paddingEnd="8dp">
 
         <com.google.android.material.button.MaterialButton
@@ -34,7 +37,7 @@
             android:paddingStart="12dp"
             android:text="@string/chat_title"
             android:textColor="@color/ink"
-            android:textSize="18sp"
+            android:textSize="21sp"
             android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton
@@ -57,6 +60,32 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:background="@color/paper"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_look_screen"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/look_screen" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_screen_settings"
+            android:layout_marginStart="6dp"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/screen_awareness" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/chat_banner"
         android:layout_width="match_parent"
@@ -71,24 +100,39 @@
         android:textSize="13sp"
         android:visibility="gone" />
 
-    <ScrollView
-        android:id="@+id/chat_scroll"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:fillViewport="true"
-        android:paddingStart="12dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="8dp">
+        android:layout_weight="1">
 
-        <LinearLayout
-            android:id="@+id/chat_messages"
+        <ScrollView
+            android:id="@+id/chat_scroll"
             android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp">
+
+            <LinearLayout
+                android:id="@+id/chat_messages"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_jump_latest"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
-    </ScrollView>
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="8dp"
+            android:minHeight="48dp"
+            android:text="@string/chat_jump_latest"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/chat_status"
@@ -104,6 +148,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="bottom"
+        android:background="@color/paper"
         android:orientation="horizontal"
         android:padding="8dp">
 
@@ -112,7 +157,12 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="@string/chat_input_hint">
+            android:hint="@string/chat_input_hint"
+            app:boxBackgroundColor="@color/ice"
+            app:boxCornerRadiusBottomEnd="18dp"
+            app:boxCornerRadiusBottomStart="18dp"
+            app:boxCornerRadiusTopEnd="18dp"
+            app:boxCornerRadiusTopStart="18dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/chat_input"
@@ -120,6 +170,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="top|start"
                 android:inputType="textMultiLine|textCapSentences"
+                android:imeOptions="flagNoExtractUi|flagNoFullscreen"
                 android:maxLength="4000"
                 android:maxLines="5"
                 android:minLines="1"

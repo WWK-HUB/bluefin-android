@@ -61,21 +61,26 @@ internal object OverlayLayout {
      * The full-screen stage is NOT_TOUCHABLE so input reaches the app below it.
      * On Android 12+ the stage still counts as an obscuring system-alert window,
      * so its alpha must not exceed the maximum reported by
-     * InputManager.getMaximumObscuringOpacityForTouch(). Keep the prior 0.8
-     * preference as the upper bound even when the device allows more, and lower
-     * it when a vendor reports a stricter maximum. Pre-12 has no such check.
+     * InputManager.getMaximumObscuringOpacityForTouch(). Pre-12 has no such
+     * check.
      */
     fun stageAlpha(
         sdkInt: Int,
         maximumObscuringOpacityForTouch: Float = MAX_OBSCURING_OPACITY_FOR_TOUCH,
     ): Float {
         if (sdkInt < 31) return 1f
-        val maximum = maximumObscuringOpacityForTouch
+        return maximumObscuringOpacityForTouch
             .takeIf { it.isFinite() }
             ?.coerceIn(0f, 1f)
             ?: MAX_OBSCURING_OPACITY_FOR_TOUCH
-        return minOf(MAX_OBSCURING_OPACITY_FOR_TOUCH, maximum)
     }
+
+    fun effectivePetOpacity(requestedOpacity: Float, stageAlpha: Float): Float =
+        minOf(BluefinStore.clampOpacity(requestedOpacity), stageAlpha)
+
+    // The compositor multiplies the character and window opacities.
+    fun characterOpacity(requestedOpacity: Float, stageAlpha: Float): Float =
+        if (stageAlpha > 0f) effectivePetOpacity(requestedOpacity, stageAlpha) / stageAlpha else 0f
 
     enum class Toggle {
         Show,

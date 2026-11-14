@@ -143,7 +143,7 @@ class BubblePreviewStageCContractTest {
         assertTrue(epoch.contains("bubbleGeometryGeneration += 1"))
         assertTrue(epoch.contains("invalidateBubbleScreenSnapshot()"))
         assertTrue(epoch.contains("runBubbleHostCallback(\"insets-epoch\")"))
-        assertTrue(epoch.contains("controller.onHostConfigurationChanged()"))
+        assertTrue(epoch.contains("controller.onHostInsetsChanged()"))
         assertTrue(host.contains("const val INSETS_EPOCH_COALESCE_MS = 100L"))
 
         val capture = methodBody(host, "    private fun bubbleScreenSnapshot(")
@@ -220,7 +220,7 @@ class BubblePreviewStageCContractTest {
         val send = methodBody(host, "    private fun sendFromOverlay()")
         assertTrue(send.contains("ChatDraft.state.captureSend()"))
         assertTrue(send.contains("ChatDraft.state.onSendOutcome(capture, outcome)"))
-        assertTrue(send.contains("snapshot.lines.lastIndex"))
+        assertTrue(send.contains("snapshot.lines.indexOfLast { it.role == ChatRole.USER }"))
         assertTrue(send.contains("snapshot.requestGeneration"))
     }
 
@@ -284,7 +284,8 @@ class BubblePreviewStageCContractTest {
     fun controllerUsesOneTickerOneDeadlineAndTextOnlyUpdates() {
         val controller = source("src/main/java/$modulePath/BubblePreviewController.kt")
         val after = methodBody(controller, "    private fun afterSnapshot(")
-        assertTrue(after.contains("snapshot.visibleState == BubbleVisibleState.TYPING"))
+        assertTrue(after.contains("snapshot.phase == BubbleTurnPhase.STREAMING"))
+        assertTrue(after.contains("snapshot.phase == BubbleTurnPhase.COMPLETE"))
         assertTrue(after.contains("snapshot.visibleGraphemes < snapshot.targetGraphemes"))
         assertTrue(after.contains("if (hasBacklog) scheduleTick() else cancelTick()"))
 
