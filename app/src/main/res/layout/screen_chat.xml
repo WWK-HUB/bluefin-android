@@ -59,6 +59,30 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_look_screen"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/look_screen" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_screen_settings"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/screen_awareness" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/chat_banner"
         android:layout_width="match_parent"

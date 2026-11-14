@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="look_screen">看屏幕</string>
+    <string name="screen_awareness">屏幕观察</string>
+    <style name="Theme.Bluefin.ScreenAwareness" parent="Theme.Bluefin">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>

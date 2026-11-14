@@ -292,6 +292,8 @@ internal class OverlayWindow(
         } catch (error: Exception) {
             Log.w(TAG, "optional bubble close contained type=${error.javaClass.name}")
         } finally {
+            ScreenAwareness.onOverlayReply = null
+            ScreenAwareness.hideOverlayForCapture = null
             OverlayAppVisibility.removeChatVisibilityListener(chatVisibilityListener)
             if (bubble?.hasUnresolvedCleanup() != true) bubblePreview = null
             chatSession?.stop()
@@ -677,8 +679,17 @@ internal class OverlayWindow(
     }
 
     private fun addOrbPanelListeners() {
+        bindScreenAwareness()
         orbPanel.findViewById<View>(R.id.overlay_open_chat).setOnClickListener {
             openSpeechEntry()
+        }
+        orbPanel.findViewById<View>(R.id.overlay_look_screen).setOnClickListener {
+            collapseOrb()
+            ScreenAwarenessActivity.look(appContext, overlay = true)
+        }
+        orbPanel.findViewById<View>(R.id.overlay_screen_settings).setOnClickListener {
+            collapseOrb()
+            appContext.startActivity(ScreenAwarenessActivity.settingsIntent(appContext, overlay = true))
         }
         orbPanel.findViewById<View>(R.id.overlay_change_character).setOnClickListener {
             collapseOrb()
@@ -776,6 +787,27 @@ internal class OverlayWindow(
         }
         orbPanel.findViewById<View>(R.id.overlay_unconfigured_settings).setOnClickListener {
             openModelSettingsFromOverlay()
+        }
+    }
+
+    private fun bindScreenAwareness() {
+        ScreenAwareness.onOverlayReply = { prompt, snapshot ->
+            if (bubbleRestoreAllowed()) {
+                chatSession = ChatSession.shared(appContext)
+                scheduleBubblePreviewAfterStarted(
+                    userSummary = bubbleSummary(prompt),
+                    acceptedGeneration = snapshot.requestGeneration,
+                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
+                )
+                true
+            } else false
+        }
+        ScreenAwareness.hideOverlayForCapture = { hide ->
+            val visibility = if (hide) View.INVISIBLE else View.VISIBLE
+            root.visibility = visibility
+            orbRoot.visibility = visibility
+            hit.visibility = visibility
+            if (hide) dismissBubblePreview()
         }
     }
 
@@ -1168,6 +1200,11 @@ internal class OverlayWindow(
         }
         ChatDraft.state.edit(text)
         val capture = ChatDraft.state.captureSend()
+        if (ScreenAwareness.isLookCommand(text)) {
+            dismissBubblePreview()
+            ScreenAwarenessActivity.look(appContext, capture, overlay = true)
+            return
+        }
         val outcome = when (session.send(text)) {
             ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
             ChatSendResult.EMPTY -> ChatDraftSendOutcome.EMPTY
@@ -1277,6 +1314,11 @@ internal class OverlayWindow(
         val text = capture.text
         if (text.isBlank()) {
             updateSendState()
+            return
+        }
+        if (ScreenAwareness.isLookCommand(text)) {
+            collapseOrb()
+            ScreenAwarenessActivity.look(appContext, capture, overlay = true)
             return
         }
         val outcome = when (session.send(text)) {

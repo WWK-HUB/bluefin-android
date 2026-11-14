@@ -87,6 +87,12 @@ class ChatScreen : AppCompatActivity() {
         }
         findViewById<MaterialButton>(R.id.chat_settings).setOnClickListener { openSettings() }
         findViewById<MaterialButton>(R.id.chat_clear).setOnClickListener { confirmClear() }
+        findViewById<MaterialButton>(R.id.chat_look_screen).setOnClickListener {
+            ScreenAwarenessActivity.look(this, fromChat = true)
+        }
+        findViewById<MaterialButton>(R.id.chat_screen_settings).setOnClickListener {
+            startActivity(ScreenAwarenessActivity.settingsIntent(this))
+        }
         send.setOnClickListener { sendMessage() }
         stop.setOnClickListener { session.stop() }
         banner.setOnClickListener { openSettings() }
@@ -118,6 +124,11 @@ class ChatScreen : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onResume() {
+        super.onResume()
+        applyDraft(ChatDraft.state.text)
+    }
+
     private fun bindLatestDraft() {
         val token = pendingDraftToken
         pendingDraftToken = null
@@ -143,6 +154,10 @@ class ChatScreen : AppCompatActivity() {
     private fun sendMessage() {
         val capture = ChatDraft.state.captureSend()
         if (capture.text.trim().isEmpty()) return
+        if (ScreenAwareness.isLookCommand(capture.text)) {
+            ScreenAwarenessActivity.look(this, capture, fromChat = true)
+            return
+        }
         val result = session.send(capture.text)
         val draftOutcome = when (result) {
             ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
