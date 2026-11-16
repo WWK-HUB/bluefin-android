@@ -142,6 +142,7 @@ export function createPet(els, opts) {
   const words = opts.words || {};
   let W = 0, H = 0, floorY = 0, S = .42, T = 0;
   let roam = opts.roam ?? 'free';
+  let quietRoam = false;
   let skin = opts.skin || null;
   let hold = 0; // until T: an order from outside is in progress, free roaming waits
   let pokeHold = null; // a walk or run paused by a poke, and what to resume if roaming is still on
@@ -377,7 +378,7 @@ export function createPet(els, opts) {
   function decide() {
     const calm = roam === 'calm';
     const opts2 = [['walk', calm ? 10 : 28], ['run', calm ? 0 : 12], ['look', 14], ['jump', calm ? 2 : 8], ['sit', 16], ['expr', 12], ['wait', calm ? 30 : 10]]
-      .filter(o => o[1] > 0 && (o[0] !== pet.lastAct || o[0] === 'wait'));
+      .filter(o => (!quietRoam || (o[0] !== 'jump' && o[0] !== 'sit')) && o[1] > 0 && (o[0] !== pet.lastAct || o[0] === 'wait'));
     let r = Math.random() * opts2.reduce((a, o) => a + o[1], 0), pick = 'wait';
     for (const o of opts2) { if ((r -= o[1]) < 0) { pick = o[0]; break; } }
     if (pick === 'look') { setMode('look'); pet.lastAct = 'look'; }
@@ -821,13 +822,13 @@ export function createPet(els, opts) {
     }
     return (pet.cursor = over ? 'grab' : '');
   }
-  function pointerUp(p) {
+  function pointerUp(p, cancelled = false) {
     pet.cursor = '';
     if (!press) return;
     if (pet.mode === 'drag') {
       // hand over from the scruff anchor to the feet anchor without a visual jump
       const foot = toStage(128, 256);
-      const v = velocity();
+      const v = cancelled ? { x: 0, y: 0 } : velocity();
       pet.x = clamp(foot.x, minX(), maxX());
       const speed = Math.hypot(v.x, v.y);
       if (freeGround) {
@@ -838,11 +839,11 @@ export function createPet(els, opts) {
         pet.fy = Math.min(floorY, foot.y);
         pet.vx = clamp(v.x, -1800, 1800); pet.vy = clamp(v.y, -1800, 1400);
       }
-      pet.airKind = 'throw';
+      pet.airKind = cancelled ? 'drop' : 'throw';
       if (speed > 700) play('whoosh', 'move');
       setMode('air');
       onEvent('touch', { kind: speed > 700 ? 'throw' : 'drop', x: Math.round(pet.x) });
-    } else if (now(p) - press.t < 400) {
+    } else if (!cancelled && now(p) - press.t < 400) {
       if (pet.mode === 'sleep' || pet.mode === 'sit') {
         const wasAsleep = pet.mode === 'sleep';
         setMode('wake', { startle: true }); pet.sqv -= 2.2; pet.nextAt = T + 2.4;
@@ -853,6 +854,7 @@ export function createPet(els, opts) {
       }
     }
     press = null;
+    if (cancelled) Object.assign(pointer, { inside: false, vx: 0, samples: [] });
   }
   /**
    * Ends a drag with the body dropped from under stage point `p` with no throw: the pointer was let
@@ -933,6 +935,7 @@ export function createPet(els, opts) {
     },
     get figure() { return custom; },
     get skin() { return skin; },
+    setQuietRoam(value) { quietRoam = value; },
     setRoam(r) { roam = r; if (r !== 'off') pet.nextAt = T + 1; },
     get roam() { return roam; },
     /** Outside orders keep free roaming quiet for `seconds`. */
@@ -1001,7 +1004,14 @@ export function createBody(host, opts) {
   });
   if (start.facing === 1 || start.facing === -1) ctl.pet.facing = ctl.pet.faceVis = start.facing;
   return {
-    step(dt) { ctl.step(dt); ctl.render(); },
+    step(dt) {
+      if (Number.isFinite(dt) && dt > 0) {
+        const elapsed = Math.min(dt, 0.1);
+        const steps = Math.min(6, Math.ceil(elapsed * 60));
+        for (let i = 0; i < steps; i++) ctl.step(elapsed / steps);
+      }
+      ctl.render();
+    },
     layout: ctl.layout,
     resize: ctl.resize,
     do: ctl.doWord,
@@ -1016,7 +1026,7 @@ export function createBody(host, opts) {
     pointer(type, p) {
       if (type === 'down') ctl.pointerDown(p);
       else if (type === 'move') ctl.pointerMove(p);
-      else if (type === 'up' || type === 'cancel') ctl.pointerUp(p);
+      else if (type === 'up' || type === 'cancel') ctl.pointerUp(p, type === 'cancel');
       else if (type === 'leave') ctl.pointerLeave();
     },
     drop: ctl.dropAt,
@@ -1030,6 +1040,7 @@ export function createBody(host, opts) {
       if (facing === 1 || facing === -1) ctl.pet.facing = ctl.pet.faceVis = facing;
     },
     set(s) {
+      if (typeof s.quietRoam === 'boolean') ctl.setQuietRoam(s.quietRoam);
       if (s.roam) ctl.setRoam(s.roam);
       if (typeof s.hold === 'number') ctl.holdRoam(s.hold);
       if (typeof s.dialogOpen === 'boolean') dialogOpen = s.dialogOpen;

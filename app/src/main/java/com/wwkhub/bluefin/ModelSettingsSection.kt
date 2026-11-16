@@ -177,7 +177,10 @@ internal class ModelSettingsSection(
             .setMessage(R.string.model_clear_key_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.model_clear_confirm) { _, _ ->
-                ApiKeyVault.clear(activity)
+                if (!ApiKeyVault.clear(activity)) {
+                    testStatus.text = "无法清除 API Key，请重试。"
+                    return@setPositiveButton
+                }
                 key.setText("")
                 refreshKeyState()
                 testStatus.text = ""
@@ -187,10 +190,33 @@ internal class ModelSettingsSection(
     }
 
     private fun saveSettings() {
-        val rawUrl = url.text?.toString().orEmpty().trim()
-        if (rawUrl.isNotEmpty() && EndpointAddressPolicy.check(rawUrl) is EndpointAddressPolicy.Check.Invalid) {
-            testStatus.text = (EndpointAddressPolicy.check(rawUrl) as EndpointAddressPolicy.Check.Invalid).reason
+        val endpoint = readForm(requireConnection = false) ?: return
+        val typedKey = key.text?.toString().orEmpty()
+        if (typedKey.isNotBlank() && !ApiKeyVault.save(activity, typedKey)) {
+            testStatus.text = "无法安全保存 API Key，请重试。"
             return
+        }
+        ModelEndpointStore.save(activity, endpoint)
+        if (typedKey.isNotBlank()) key.setText("")
+        refreshKeyState()
+        testStatus.text = ""
+        OverlayLauncher.sync(activity)
+        Toast.makeText(activity, R.string.model_saved, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun readForm(requireConnection: Boolean): ModelEndpoint? {
+        val rawUrl = url.text?.toString().orEmpty().trim()
+        if (rawUrl.isNotEmpty() || requireConnection) {
+            val check = EndpointAddressPolicy.check(rawUrl)
+            if (check is EndpointAddressPolicy.Check.Invalid) {
+                testStatus.text = check.reason
+                return null
+            }
+        }
+        val modelName = model.text?.toString().orEmpty().trim()
+        if (requireConnection && modelName.isEmpty()) {
+            testStatus.text = "请填写模型名。"
+            return null
         }
         val rawTemperature = temperature.text?.toString().orEmpty().trim()
         val parsedTemperature = if (rawTemperature.isEmpty()) {
@@ -200,38 +226,28 @@ internal class ModelSettingsSection(
         }
         if (rawTemperature.isNotEmpty() && parsedTemperature == null) {
             testStatus.text = "温度需在 0 到 2 之间。"
-            return
+            return null
         }
         val rawTokens = maxTokens.text?.toString().orEmpty().trim()
-        val parsedTokens = rawTokens.toIntOrNull() ?: ModelEndpointStore.DEFAULT_MAX_TOKENS
-        if (parsedTokens <= 0) {
+        val parsedTokens = if (rawTokens.isEmpty()) ModelEndpointStore.DEFAULT_MAX_TOKENS else rawTokens.toIntOrNull()
+        if (parsedTokens == null || parsedTokens <= 0) {
             testStatus.text = "最大输出 token 需为正整数。"
-            return
+            return null
         }
         val rawHeaders = headers.text?.toString().orEmpty()
         if (!headersValid(rawHeaders)) {
             testStatus.text = "附加请求头需为每行「名称: 值」。"
-            return
+            return null
         }
-        val endpoint = ModelEndpoint(
+        return ModelEndpoint(
             providerId = currentProviderId,
             region = currentRegion,
             url = rawUrl,
-            model = model.text?.toString().orEmpty().trim(),
+            model = modelName,
             temperature = parsedTemperature,
             maxOutputTokens = parsedTokens,
             extraHeaders = rawHeaders,
         )
-        ModelEndpointStore.save(activity, endpoint)
-        val typedKey = key.text?.toString().orEmpty()
-        if (typedKey.isNotBlank()) {
-            ApiKeyVault.save(activity, typedKey)
-            key.setText("")
-        }
-        refreshKeyState()
-        testStatus.text = ""
-        OverlayLauncher.sync(activity)
-        Toast.makeText(activity, R.string.model_saved, Toast.LENGTH_SHORT).show()
     }
 
     private fun headersValid(raw: String): Boolean {
@@ -240,40 +256,20 @@ internal class ModelSettingsSection(
             .filter { it.isNotEmpty() }
             .all { line ->
                 val index = line.indexOf(':')
-                index > 0 && line.substring(index + 1).trim().isNotEmpty()
+                index > 0 && HEADER_NAME.matches(line.substring(0, index).trim()) &&
+                    line.substring(index + 1).trim().isNotEmpty()
             }
     }
 
     private fun runTest() {
         if (testing) return
-        val rawUrl = url.text?.toString().orEmpty().trim()
-        val check = EndpointAddressPolicy.check(rawUrl)
-        if (check is EndpointAddressPolicy.Check.Invalid) {
-            testStatus.text = check.reason
-            return
-        }
-        val modelName = model.text?.toString().orEmpty().trim()
-        if (modelName.isEmpty()) {
-            testStatus.text = "请填写模型名。"
-            return
-        }
-        val typedKey = key.text?.toString().orEmpty()
+        val endpoint = readForm(requireConnection = true) ?: return
+        val typedKey = key.text?.toString().orEmpty().trim()
         val apiKey = if (typedKey.isNotBlank()) typedKey else ApiKeyVault.read(activity)
         if (apiKey.isNullOrBlank()) {
             testStatus.text = "请先填写 API Key。"
             return
         }
-        val endpoint = ModelEndpoint(
-            providerId = currentProviderId,
-            region = currentRegion,
-            url = rawUrl,
-            model = modelName,
-            temperature = null,
-            maxOutputTokens = maxTokens.text?.toString()?.toIntOrNull()
-                ?.takeIf { it > 0 }
-                ?: ModelEndpointStore.DEFAULT_MAX_TOKENS,
-            extraHeaders = headers.text?.toString().orEmpty(),
-        )
         testing = true
         test.isEnabled = false
         testStatus.setText(R.string.model_testing)
@@ -283,6 +279,10 @@ internal class ModelSettingsSection(
                 activity.getString(R.string.model_connected) + "（${elapsed} ms）"
             } catch (error: ChatHttpStatusException) {
                 ChatFailureText.forStatus(error.status)
+            } catch (_: InvalidChatTestResponse) {
+                "服务未返回有效的模型回复，请检查 API 地址和模型名。"
+            } catch (_: ChatServiceException) {
+                ChatFailureText.forServiceFailure()
             } catch (error: Exception) {
                 ChatFailureText.forThrowable(error)
             }
@@ -292,5 +292,9 @@ internal class ModelSettingsSection(
                 testStatus.text = message
             }
         }, "bluefin-model-test").apply { isDaemon = true }.start()
+    }
+
+    private companion object {
+        val HEADER_NAME = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
     }
 }

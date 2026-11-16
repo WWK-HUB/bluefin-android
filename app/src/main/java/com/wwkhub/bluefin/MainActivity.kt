@@ -52,10 +52,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private lateinit var binding: ActivityMainBinding
     private lateinit var assetLoader: WebViewAssetLoader
     private val cuePlayer = CuePlayer()
+    private val applyPetFrame = Runnable { applyPetPrefs() }
     private val bridge = BluefinBridge(this)
 
     @Volatile
     private var soundOn = true
+    private var replacementWeb: WebView? = null
+    private val previewWeb: WebView get() = replacementWeb ?: binding.web
+    private var previewRendererRestarts = 0
+    private var expectedPreviewUrl = ""
+    private var lastReadyAppearance = PackFormat.BUILT_IN_ID
+
     private var previewReady = false
     private var entryPath = PreviewEntry.ROUTE_B
     private var pollGeneration = 0
@@ -88,11 +95,11 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         when (key) {
             KEY_SCALE, KEY_SIZE -> {
                 petScale = BluefinStore.readScale(prefs())
-                applyPetPrefs()
+                schedulePetPrefs()
             }
             KEY_OPACITY -> {
                 petOpacity = BluefinStore.readOpacity(prefs())
-                applyPetPrefs()
+                schedulePetPrefs()
             }
             KEY_ORB_SIZE_DP -> {
                 // Orb size only drives the overlay orb; keep the field in sync
@@ -124,7 +131,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) BluefinForegroundService.start(this)
+        if (granted) BluefinForegroundService.refresh(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -153,7 +160,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (binding.web.canGoBack()) binding.web.goBack() else finish()
+                if (previewWeb.canGoBack()) previewWeb.goBack() else finish()
             }
         })
 
@@ -175,12 +182,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         super.onResume()
         OverlayAppVisibility.setForeground(true)
         refreshFromPrefs()
+        if (currentAppearanceId != PackRepository.currentId(this)) {
+            loadEntry()
+            openCharacterSection?.refresh()
+        }
         if (previewReady) {
             applySound()
             applyPetPrefs()
         }
-        if (::binding.isInitialized) binding.web.onResume()
+        if (::binding.isInitialized) previewWeb.onResume()
         OverlayLauncher.onResume(this)
+        BluefinForegroundService.refresh(this)
         if (pendingOverlayGuide) {
             pendingOverlayGuide = false
             window.decorView.post {
@@ -192,11 +204,12 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     override fun onPause() {
         OverlayAppVisibility.setForeground(false)
-        if (::binding.isInitialized) binding.web.onPause()
+        if (::binding.isInitialized) previewWeb.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        previewWeb.removeCallbacks(applyPetFrame)
         pollGeneration++
         pendingImport?.cleanup()
         pendingImport = null
@@ -205,7 +218,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         cuePlayer.release()
         if (::binding.isInitialized) {
-            binding.web.apply {
+            previewWeb.apply {
                 stopLoading()
                 webChromeClient = null
                 webViewClient = WebViewClient()
@@ -247,14 +260,14 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             .addPathHandler("/packs/", PackAssetHandler(this))
             .build()
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
-        binding.web.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        binding.web.overScrollMode = View.OVER_SCROLL_NEVER
-        binding.web.isVerticalScrollBarEnabled = false
-        binding.web.isHorizontalScrollBarEnabled = false
-        binding.web.isLongClickable = false
-        binding.web.isHapticFeedbackEnabled = false
-        binding.web.setOnLongClickListener { true }
-        binding.web.settings.apply {
+        previewWeb.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        previewWeb.overScrollMode = View.OVER_SCROLL_NEVER
+        previewWeb.isVerticalScrollBarEnabled = false
+        previewWeb.isHorizontalScrollBarEnabled = false
+        previewWeb.isLongClickable = false
+        previewWeb.isHapticFeedbackEnabled = false
+        previewWeb.setOnLongClickListener { true }
+        previewWeb.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
@@ -274,14 +287,14 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) forceDark = WebSettings.FORCE_DARK_OFF
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) isAlgorithmicDarkeningAllowed = false
         }
-        binding.web.addJavascriptInterface(bridge, BRIDGE_NAME)
-        binding.web.webChromeClient = object : WebChromeClient() {
+        previewWeb.addJavascriptInterface(bridge, BRIDGE_NAME)
+        previewWeb.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
                 Log.d(TAG, "${consoleMessage.messageLevel()} ${consoleMessage.message()}")
                 return true
             }
         }
-        binding.web.webViewClient = object : WebViewClientCompat() {
+        previewWeb.webViewClient = object : WebViewClientCompat() {
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest,
@@ -293,9 +306,31 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (!url.contains(entryPath.substringAfterLast('/'))) return
+                if (view !== previewWeb || url != expectedPreviewUrl) return
                 injectBridge()
                 pollReady()
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                if (view !== previewWeb || isDestroyed) return true
+                pollGeneration++
+                previewReady = false
+                val parent = view.parent as? android.view.ViewGroup ?: return false
+                val index = parent.indexOfChild(view)
+                val params = view.layoutParams
+                parent.removeView(view)
+                view.destroy()
+                replacementWeb = WebView(this@MainActivity)
+                parent.addView(previewWeb, index, params)
+                setupWebView()
+                if (++previewRendererRestarts <= 3) {
+                    if (previewRendererRestarts > 1) PackRepository.setCurrent(this@MainActivity, PackFormat.BUILT_IN_ID)
+                    loadEntry(force = true)
+                } else {
+                    binding.openActions.isEnabled = false
+                    showStatus(getString(R.string.orb_stage_failed), error = true)
+                }
+                return true
             }
         }
     }
@@ -307,7 +342,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             val appearance = refreshCharacter()
             val scheme = PackRepository.readScheme(this, appearance.manifest)
             val useDefaultPreview = appearance.id == PackFormat.BUILT_IN_ID && scheme.isEmpty()
-            val key = "pack:${appearance.id}:$scheme"
+            val key = "pack:${appearance.id}:$scheme:${PackRepository.revision(this, appearance.id)}"
             if (!force && key == lastLoadedEntryKey && previewReady) return
             lastLoadedEntryKey = key
             pollGeneration++
@@ -325,7 +360,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
                 showStatus(getString(R.string.loading), error = false)
                 val url = PreviewEntry.packHostUrl(appearance.id, scheme, appearance.builtIn)
                 Log.i(TAG, "load pack $url")
-                binding.web.loadUrl(url)
+                navigatePreview(url)
                 return
             }
             val path = PreviewEntry.choose(assetExists(PreviewEntry.ROUTE_B), assetExists(PreviewEntry.ROUTE_A))
@@ -339,10 +374,29 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             showStatus(getString(R.string.loading), error = false)
             val url = PreviewEntry.urlFor(path)
             Log.i(TAG, "load $url")
-            binding.web.loadUrl(url)
+            navigatePreview(url)
         } finally {
             loadingEntry = false
         }
+    }
+
+    private fun navigatePreview(url: String) {
+        val generation = pollGeneration
+        expectedPreviewUrl = url + (if ('?' in url) "&" else "?") + "load=$generation"
+        previewWeb.loadUrl(expectedPreviewUrl)
+        previewWeb.postDelayed({
+            if (!isDestroyed && !previewReady && expectedPreviewUrl.endsWith("load=$generation")) failPreview()
+        }, 15_000L)
+    }
+
+    private fun failPreview() {
+        pollGeneration++
+        expectedPreviewUrl = ""
+        if (currentAppearanceId != PackFormat.BUILT_IN_ID) {
+            val fallback = if (lastReadyAppearance == currentAppearanceId) PackFormat.BUILT_IN_ID else lastReadyAppearance
+            Toast.makeText(this, R.string.orb_stage_failed, Toast.LENGTH_LONG).show()
+            switchCharacter(fallback)
+        } else showStatus(getString(R.string.load_timeout), error = true)
     }
 
     private fun refreshCharacter(): PackAppearance {
@@ -568,6 +622,10 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private fun onPacksInstalled(installed: List<PackAppearance>) {
         openCharacterSection?.refresh()
         if (installed.isEmpty()) return
+        if (installed.any { it.id == PackRepository.currentId(this) }) {
+            loadEntry()
+            OverlayLauncher.sync(this)
+        }
         val first = installed.first()
         val message = if (installed.size == 1) {
             getString(R.string.character_switch_message, first.displayName)
@@ -600,7 +658,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     private fun injectBridge() {
         val script = assets.open("native/bridge.js").bufferedReader().use { it.readText() }
-        binding.web.evaluateJavascript(script, null)
+        previewWeb.evaluateJavascript(script, null)
         applySound()
     }
 
@@ -609,15 +667,16 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         var tries = 0
         fun tick() {
             if (generation != pollGeneration || isDestroyed) return
-            binding.web.evaluateJavascript(READY_JS) { raw ->
+            previewWeb.evaluateJavascript("window.__bluefinLoadFailed ? -1 : (" + READY_JS + ")") { raw ->
                 if (generation != pollGeneration || isDestroyed) return@evaluateJavascript
                 if (raw == "true") {
                     onPreviewReady()
-                } else if (++tries < 200) {
-                    binding.web.postDelayed({ tick() }, 200)
+                } else if (raw == "-1") {
+                    failPreview()
+                } else if (++tries < 75) {
+                    previewWeb.postDelayed({ tick() }, 200)
                 } else {
-                    val detail = lastProblem?.let { "\n$it" }.orEmpty()
-                    showStatus(getString(R.string.load_timeout) + detail, error = true)
+                    failPreview()
                 }
             }
         }
@@ -627,7 +686,8 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private fun onPreviewReady() {
         if (previewReady) return
         previewReady = true
-        binding.web.evaluateJavascript("window.__bluefinNative&&window.__bluefinNative.fitStage()", null)
+        lastReadyAppearance = currentAppearanceId
+        previewWeb.evaluateJavascript("window.__bluefinNative&&window.__bluefinNative.fitStage()", null)
         applySound()
         showStatus("", error = false)
         binding.statusOverlay.visibility = View.GONE
@@ -757,7 +817,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     private fun trigger(word: String) {
         val quoted = JSONObject.quote(word)
-        binding.web.evaluateJavascript(
+        previewWeb.evaluateJavascript(
             "window.__bluefinNative&&window.__bluefinNative.act($quoted)",
             null,
         )
@@ -928,7 +988,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
                 petScale = BluefinStore.progressToScale(progress)
                 sizeValue.text = String.format(Locale.US, "%.2f", petScale)
                 BluefinStore.writeScale(prefs(), petScale)
-                applyPetPrefs()
             }
 
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -940,7 +999,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
                 petOpacity = BluefinStore.progressToOpacity(progress)
                 opacityValue.text = "${(petOpacity * 100).roundToInt()}%"
                 BluefinStore.writeOpacity(prefs(), petOpacity)
-                applyPetPrefs()
             }
 
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -1017,8 +1075,8 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             showTips()
             return
         }
-        binding.web.evaluateJavascript(RESET_JS) { raw ->
-            if (raw?.contains("missing") == true) binding.web.reload()
+        previewWeb.evaluateJavascript(RESET_JS) { raw ->
+            if (raw?.contains("missing") == true) previewWeb.reload()
             showTips()
         }
     }
@@ -1027,12 +1085,12 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             if (granted == PackageManager.PERMISSION_GRANTED) {
-                BluefinForegroundService.start(this)
+                BluefinForegroundService.refresh(this)
             } else {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         } else {
-            BluefinForegroundService.start(this)
+            BluefinForegroundService.refresh(this)
         }
     }
 
@@ -1045,6 +1103,12 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         petOrbSizeDp = BluefinStore.readOrbSizeDp(prefs())
     }
 
+    private fun schedulePetPrefs() {
+        if (!::binding.isInitialized) return
+        previewWeb.removeCallbacks(applyPetFrame)
+        previewWeb.postOnAnimation(applyPetFrame)
+    }
+
     private fun applyPetPrefs() {
         if (!::binding.isInitialized) return
         val scale = String.format(Locale.US, "%.2f", BluefinStore.clampScale(petScale))
@@ -1052,16 +1116,15 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         // A pack that declares can.walk=false never roams, but the saved global
         // preference is left untouched so it applies again on the next pack.
         val roam = roamOn && (currentManifest?.canWalk != false)
-        binding.web.evaluateJavascript(
+        previewWeb.evaluateJavascript(
             "window.__bluefinNative&&window.__bluefinNative.applyPrefs($roam,$scale,$petHidden,$opacity)",
             null,
         )
-        OverlayLauncher.sync(this)
     }
 
     private fun applySound() {
         if (!::binding.isInitialized) return
-        binding.web.evaluateJavascript(
+        previewWeb.evaluateJavascript(
             "window.__bluefinApplySound&&window.__bluefinApplySound($soundOn)",
             null,
         )

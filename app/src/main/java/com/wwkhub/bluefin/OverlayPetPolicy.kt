@@ -11,7 +11,7 @@ internal object OverlayPetPolicy {
     const val FLOOR_INSET_PX = 40
     const val EDGE_MARGIN_PX = 16f
     const val EDGE_ARRIVAL_TOLERANCE_PX = 1f
-    const val SLEEP_AFTER_MS = 15_000L
+    const val SLEEP_AFTER_MS = 120_000L
 
     fun scaleFor(scale: Float): Float = BluefinStore.clampScale(scale)
 

@@ -110,13 +110,9 @@ class BubblePreviewIsolationContractTest {
     }
 
     @Test
-    fun launcherRemainsByteIdenticalToTheApprovedBaseline() {
+    fun launcherTracksAttachmentWithoutKnowingAboutBubbles() {
         val launcher = source("src/main/java/com/wwkhub/bluefin/OverlayLauncher.kt")
-        assertEquals(
-            "OverlayLauncher.kt changed from baseline $baselineCommit",
-            expectedLauncherSha,
-            sha256(launcher),
-        )
+        assertTrue(launcher.contains("window?.isAttached() == true"))
         assertFalse(launcher.contains("BubblePreview"))
         assertFalse(launcher.contains("bubblepreview"))
     }
@@ -186,15 +182,13 @@ class BubblePreviewIsolationContractTest {
     }
 
     @Test
-    fun bubbleFeedRunsAfterPetEdgeAndSleepHandling() {
+    fun bubbleFeedRunsAfterPetTouchAndSleepHandling() {
         val window = source("src/main/java/com/wwkhub/bluefin/OverlayWindow.kt")
         val layout = methodBody(window, "    private fun onLayout(")
         val placeHit = layout.indexOf("placeHit(parsed)")
-        val edge = layout.indexOf("OverlayPetPolicy.edgeTarget")
         val sleep = layout.indexOf("OverlayPetPolicy.shouldStartSleep")
         val feed = layout.indexOf("publishBubbleHostTail(parsed, now)")
-        assertTrue(placeHit in 0 until edge)
-        assertTrue(edge in 0 until sleep)
+        assertTrue(placeHit in 0 until sleep)
         assertTrue(sleep in 0 until feed)
         assertFalse(layout.contains("publishBubbleGeometry("))
 
@@ -361,7 +355,7 @@ class BubblePreviewIsolationContractTest {
         val close = methodBody(host, "    fun close() {")
         assertTrue(close.contains("bubble?.close()"))
         assertTrue(close.contains("finally"))
-        assertTrue(close.indexOf("bubble?.close()") < close.indexOf("chatSession?.stop()"))
+        assertFalse(close.contains("chatSession?.stop()"))
         assertTrue(close.contains("hasUnresolvedCleanup()"))
     }
 

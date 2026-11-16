@@ -202,7 +202,7 @@ class BubblePreviewStageCContractTest {
         assertFalse(host.contains("MAX_BUBBLE_SIGNAL_CODE_UNITS"))
         assertFalse(host.contains(".take(MAX_BUBBLE"))
         val payload = methodBody(host, "    private fun bubbleSignalPayload(")
-        assertTrue(payload.contains("userIndex + 1"))
+        assertTrue(payload.contains("snapshot.responseStartIndex"))
         assertTrue(payload.contains("ChatRole.ASSISTANT"))
         assertTrue(payload.contains("ChatPhase.FAILED"))
         assertTrue(payload.contains("ChatPhase.STOPPED"))
@@ -220,7 +220,7 @@ class BubblePreviewStageCContractTest {
         val send = methodBody(host, "    private fun sendFromOverlay()")
         assertTrue(send.contains("ChatDraft.state.captureSend()"))
         assertTrue(send.contains("ChatDraft.state.onSendOutcome(capture, outcome)"))
-        assertTrue(send.contains("snapshot.lines.indexOfLast { it.role == ChatRole.USER }"))
+        assertTrue(send.contains("snapshot.responseStartIndex"))
         assertTrue(send.contains("snapshot.requestGeneration"))
     }
 

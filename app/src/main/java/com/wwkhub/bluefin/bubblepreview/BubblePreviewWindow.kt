@@ -33,6 +33,7 @@ import android.view.inputmethod.InputMethodManager
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import android.widget.EditText
+import androidx.appcompat.widget.AppCompatEditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -158,6 +159,7 @@ internal class BubblePreviewWindow(
     private var inputView: EditText? = null
     private var sendView: TextView? = null
     private var primaryReplyAction: ImageView? = null
+    private var fullReplyAction: TextView? = null
     private var thinkingDots: ImageView? = null
     private var contentView: View? = null
     private var bodyContainer: View? = null
@@ -460,6 +462,7 @@ internal class BubblePreviewWindow(
         inputView = null
         sendView = null
         primaryReplyAction = null
+        fullReplyAction = null
         tailView = null
     }
 
@@ -561,7 +564,7 @@ internal class BubblePreviewWindow(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val edit = object : EditText(context) {
+        val edit = object : AppCompatEditText(context) {
             override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
                 if (keyCode == KeyEvent.KEYCODE_BACK && imeBottomPx == 0) {
                     if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) requestUserClose()
@@ -770,28 +773,42 @@ internal class BubblePreviewWindow(
             }
             val primary = actionIcon(
                 context,
-                R.drawable.bf_speech_ic_expand,
-                R.string.bf_speech_full_chat_cd,
-            ) { if (canStopReply()) onStop() else onExpand() }
+                R.drawable.bf_speech_ic_stop,
+                R.string.bf_speech_stop_cd,
+            ) { onStop() }
             primaryReplyAction = primary
+            val fullReply = TextView(context).apply {
+                setText(R.string.orb_reply_full_short)
+                contentDescription = context.getString(R.string.orb_reply_full)
+                setTextColor(iconColor)
+                textSize = 12f
+                gravity = Gravity.CENTER
+                isFocusable = true
+                setOnClickListener { onExpand() }
+            }
+            fullReplyAction = fullReply
             updateReplyAction()
             val close = actionIcon(
                 context,
                 R.drawable.bf_speech_ic_close,
                 R.string.bf_speech_close_cd,
             ) { requestUserClose() }
-            actions.addView(primary, LinearLayout.LayoutParams(touchPx(), touchPx()))
+            val primarySlot = FrameLayout(context).apply {
+                addView(primary, FrameLayout.LayoutParams(touchPx(), touchPx()))
+                addView(fullReply, FrameLayout.LayoutParams(touchPx(), touchPx()))
+            }
+            actions.addView(primarySlot, LinearLayout.LayoutParams(touchPx(), touchPx()))
             actions.addView(close, LinearLayout.LayoutParams(touchPx(), touchPx()))
             frame.addView(actions)
         }
         bodyContainer?.apply {
             isFocusable = true
-            setOnClickListener { onRecord() }
+            setOnClickListener { openReplyBody() }
             ViewCompat.addAccessibilityAction(
                 this,
-                context.getString(R.string.bf_speech_expand_cd),
+                context.getString(R.string.orb_reply_full),
             ) { _, _ ->
-                onRecord()
+                onExpand()
                 true
             }
         }
@@ -965,15 +982,19 @@ internal class BubblePreviewWindow(
         content?.phase == BubbleTurnPhase.THINKING || content?.phase == BubbleTurnPhase.STREAMING
 
     private fun updateReplyAction() {
-        val action = primaryReplyAction ?: return
-        val description = action.context.getString(
-            if (canStopReply()) R.string.bf_speech_stop_cd else R.string.bf_speech_full_chat_cd,
-        )
-        if (action.contentDescription == description) return
-        action.contentDescription = description
-        action.setImageResource(
-            if (canStopReply()) R.drawable.bf_speech_ic_stop else R.drawable.bf_speech_ic_expand,
-        )
+        val canStop = canStopReply()
+        primaryReplyAction?.visibility = if (canStop) View.VISIBLE else View.GONE
+        fullReplyAction?.visibility = if (canStop) View.GONE else View.VISIBLE
+    }
+
+    private fun openReplyBody() {
+        val layout = bodyView?.layout
+        val clipped = layout != null && layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
+        if (content?.overflow == true || clipped) {
+            onExpand()
+        } else {
+            onRecord()
+        }
     }
 
     private fun updateInputViews() {

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="look_screen">看屏幕</string>
+    <string name="look_screen">看屏幕 · 直发</string>
+    <string name="look_screen_continue">继续授权</string>
+    <string name="look_screen_disclosure">授权后，本次截图会直接发送给模型 %1$s。</string>
+    <string name="picked_screen_disclosure">这张截图将发送给当前模型 %1$s。</string>
     <string name="screen_awareness">屏幕观察</string>
     <style name="Theme.Bluefin.ScreenAwareness" parent="Theme.Bluefin">
         <item name="android:windowIsTranslucent">true</item>

@@ -15,6 +15,8 @@ const events = [];
 let body = null;
 let stopped = false;
 let last = 0;
+let frame = 0;
+let characterVisible = true;
 let soundMap = {};
 let packBaseUrl = null;
 
@@ -31,6 +33,7 @@ function showError(message) {
     errorBox.textContent = message;
     errorBox.style.display = "block";
   }
+  window.__bluefinLoadFailed = true;
   report("pack: " + message);
 }
 
@@ -40,7 +43,7 @@ function clamp(value, min, max) {
 }
 
 function userScale() {
-  return clamp(window.__bluefinForceScale, 0.5, 1.3);
+  return clamp(window.__bluefinForceScale ?? 0.85, 0.5, 1.3);
 }
 
 function bounds() {
@@ -49,7 +52,7 @@ function bounds() {
     W: stage.clientWidth || window.innerWidth,
     H: stage.clientHeight || window.innerHeight,
     floorY: (stage.clientHeight || window.innerHeight) - 40,
-    S: 0.42 * s,
+    S: s,
   };
 }
 
@@ -98,12 +101,17 @@ function packBase() {
 }
 
 function ready() {
+  characterVisible = window.__bluefinCharacterVisible !== false;
   window.__BLUEFIN_READY = true;
   window.qa = window.qa || {};
   window.qa.ready = true;
   window.qa.events = events;
   window.qa.body = body;
   window.qa.manual = window.qa.manual || function () {};
+  window.qa.setVisible = function (visible) {
+    characterVisible = visible;
+    updateFrameLoop();
+  };
   window.qa.reset = function () {
     try { if (body && typeof body.do === "function") body.do("stand"); } catch (_) {}
   };
@@ -129,18 +137,34 @@ function ready() {
 }
 
 function tick(now) {
-  if (stopped || !body) return;
-  if (!last) last = now;
-  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
-  last = now;
+  frame = 0;
+  if (stopped || !body || !characterVisible || document.hidden) return;
+  // Imported packs may redraw a layered rig or hundreds of canvas strips
+  // per step. Keep that work bounded even on high refresh rate devices.
   try {
+    if (last && now - last < (body.layout().mode === 'sleep' ? 99 : 33)) {
+      updateFrameLoop();
+      return;
+    }
+    const dt = last ? Math.max(0, Math.min(0.1, (now - last) / 1000)) : 1 / 60;
+    last = now;
     body.step(dt, true);
   } catch (error) {
     stopped = true;
     showError("角色动作出错：" + (error && error.message ? error.message : error));
     return;
   }
-  requestAnimationFrame(tick);
+  updateFrameLoop();
+}
+
+function updateFrameLoop() {
+  if (stopped || !body || !characterVisible || document.hidden) {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    last = 0;
+  } else if (!frame) {
+    frame = requestAnimationFrame(tick);
+  }
 }
 
 async function boot() {
@@ -178,13 +202,16 @@ async function boot() {
   for (const name of ["step", "layout", "do"]) {
     if (!body || typeof body[name] !== "function") throw new Error("角色主体缺少 " + name);
   }
+  body.step(1 / 60, true);
   ready();
   try {
     const canWalk = !(manifest.can && manifest.can.walk === false);
     body.set && body.set({ roam: canWalk ? "free" : "off" });
   } catch (_) {}
-  requestAnimationFrame(tick);
+  updateFrameLoop();
 }
+
+document.addEventListener("visibilitychange", updateFrameLoop);
 
 window.addEventListener("resize", () => {
   try { if (body && typeof body.resize === "function") body.resize(); } catch (_) {}
@@ -194,9 +221,9 @@ window.addEventListener("unhandledrejection", (event) => report("pack rejection:
 
 boot().catch((error) => {
   stopped = true;
-  window.__BLUEFIN_READY = true;
-  window.qa = window.qa || { events, body: null, ready: true };
-  window.qa.ready = true;
+  window.__BLUEFIN_READY = false;
+  window.qa = window.qa || { events, body: null };
+  window.qa.ready = false;
   window.qa.events = events;
   window.qa.body = null;
   showError("角色包加载失败，可切换其他角色。（" + (error && error.message ? error.message : error) + "）");

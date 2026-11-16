@@ -4,6 +4,11 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.util.concurrent.Executors
 
 internal enum class ChatRole {
     USER,
@@ -25,8 +30,9 @@ internal data class ChatLine(
 internal object TranscriptFile {
     private const val FILE = "bluefin_chat_transcript.json"
 
-    fun read(context: Context): MutableList<ChatLine> {
-        val file = file(context)
+    fun read(context: Context): List<ChatLine> = read(file(context))
+
+    internal fun read(file: File): List<ChatLine> {
         if (!file.isFile) return mutableListOf()
         return try {
             val array = JSONArray(file.readText())
@@ -55,29 +61,57 @@ internal object TranscriptFile {
 
     fun write(context: Context, lines: List<ChatLine>) {
         try {
-            val array = JSONArray()
-            lines.forEach { line ->
-                array.put(
-                    JSONObject()
-                        .put("role", if (line.role == ChatRole.ASSISTANT) "assistant" else "user")
-                        .put("text", line.text)
-                        .put("stopped", line.stopped)
-                        .put("failed", line.failed),
-                )
-            }
-            file(context).writeText(array.toString())
+            write(file(context), lines)
         } catch (_: Exception) {
             // History is helpful but never allowed to break a send.
         }
     }
 
     fun clear(context: Context) {
-        try {
-            file(context).delete()
-        } catch (_: Exception) {
-            // Nothing else to do; the in-memory transcript is cleared by the session.
-        }
+        write(context, emptyList())
     }
 
     private fun file(context: Context): File = File(context.applicationContext.filesDir, FILE)
+
+    internal fun write(file: File, lines: List<ChatLine>) {
+        val array = JSONArray()
+        lines.forEach { line ->
+            array.put(
+                JSONObject()
+                    .put("role", if (line.role == ChatRole.ASSISTANT) "assistant" else "user")
+                    .put("text", line.text)
+                    .put("stopped", line.stopped)
+                    .put("failed", line.failed),
+            )
+        }
+        val staged = File(file.parentFile, "${file.name}.new")
+        try {
+            FileOutputStream(staged).use { output ->
+                output.write(array.toString().toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            Files.move(staged.toPath(), file.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally {
+            staged.delete()
+        }
+    }
+}
+
+/** Callers enqueue while holding the chat session lock. Only the writer accesses the disk. */
+internal class TranscriptWrites(
+    private val dispatch: (Runnable) -> Unit = Executors.newSingleThreadExecutor { work ->
+        Thread(work, "bluefin-transcript").apply { isDaemon = true }
+    }::execute,
+) {
+    @Volatile private var revision = 0L
+
+    fun write(action: () -> Unit) {
+        val queuedRevision = revision
+        dispatch(Runnable { if (queuedRevision == revision) action() })
+    }
+
+    fun clear(action: () -> Unit) {
+        revision++
+        write(action)
+    }
 }

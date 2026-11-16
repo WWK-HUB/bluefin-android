@@ -34,7 +34,7 @@ class ChatAccessGateTest {
             "windowManager.addView(root, params)",
             "attached = true",
             "layoutOrb()",
-            "web.loadUrl(",
+            "loadStage(",
         )
         var cursor = -1
         expected.forEach { line ->

@@ -1,6 +1,5 @@
 package com.wwkhub.bluefin
 
-import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -40,6 +38,11 @@ class BluefinForegroundService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+        if (!isNeeded(this)) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
@@ -125,29 +128,26 @@ class BluefinForegroundService : Service() {
         private const val ACTION_TOGGLE_OVERLAY = "com.wwkhub.bluefin.action.TOGGLE_OVERLAY"
         private const val ACTION_REFRESH = "com.wwkhub.bluefin.action.REFRESH_NOTIFICATION"
 
-        fun start(context: Context) {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, BluefinForegroundService::class.java),
-            )
-        }
+        private fun isNeeded(context: Context): Boolean =
+            (context.getSharedPreferences(BluefinStore.PREFS, Context.MODE_PRIVATE)
+                .getBoolean(BluefinStore.KEY_OVERLAY, false) && Settings.canDrawOverlays(context)) ||
+                ChatSession.peek()?.hasActiveWorker() == true
 
         fun refresh(context: Context) {
-            if (!canPostNotifications(context)) return
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, BluefinForegroundService::class.java).apply {
-                    action = ACTION_REFRESH
-                },
-            )
-        }
-
-        private fun canPostNotifications(context: Context): Boolean {
-            if (Build.VERSION.SDK_INT < 33) return true
-            return ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
+            val intent = Intent(context, BluefinForegroundService::class.java).apply {
+                action = ACTION_REFRESH
+            }
+            if (!isNeeded(context)) {
+                context.stopService(intent)
+                return
+            }
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (error: IllegalStateException) {
+                Log.w(TAG, "foreground service start deferred type=${error.javaClass.simpleName}")
+            } catch (error: SecurityException) {
+                Log.w(TAG, "foreground service start denied type=${error.javaClass.simpleName}")
+            }
         }
     }
 }

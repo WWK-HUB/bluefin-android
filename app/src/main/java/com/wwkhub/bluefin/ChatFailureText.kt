@@ -13,6 +13,7 @@ internal object ChatFailureText {
 
     /** Safe desktop copy when a cached/older unknown value cannot be allowed. */
     const val BUBBLE_FAILURE: String = "回复失败，请在记录中查看。"
+    const val SCREEN_EXPIRED: String = "截图已失效，请重新发起看屏。"
 
     fun forStatus(status: Int): String = when {
         status == 401 || status == 403 -> "API Key 可能不对，请检查 API Key。"
@@ -84,5 +85,6 @@ internal object ChatFailureText {
         "证书或安全连接出错，请检查 API 地址和网络。",
         "模型没有返回内容，请稍后再试。",
         SERVICE_FAILURE,
+        SCREEN_EXPIRED,
     )
 }

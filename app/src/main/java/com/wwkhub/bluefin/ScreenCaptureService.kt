@@ -22,12 +22,12 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class ScreenCaptureService : Service() {
@@ -37,22 +37,28 @@ class ScreenCaptureService : Service() {
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
+    // Capture-thread state. Keep a surface attached during timed observation
+    // so Android can resume mirroring when the selected task comes back.
+    private var periodicReader = false
+    private var latestImage: Image? = null
     private var width = 0
     private var height = 0
-    @Volatile private var selectedVisible = true
+    private val scope = ScreenCaptureScope()
+    private var ending = false
     private var periodic = false
     private var interval = ScreenAwareness.DEFAULT_INTERVAL
     private var active = false
     private var sampling = false
     private var readingForManual = false
-    private var request: ((ByteArray?) -> Unit)? = null
+    private data class ManualRequest(val permit: Long, val callback: (CapturedScreen?) -> Unit)
+    private var request: ManualRequest? = null
     private var analysisClient: ChatCompletionsClient? = null
     private var analysisThread: Thread? = null
-    private var periodicEndpoint: ModelEndpoint? = null
-    private var lastFingerprint: IntArray? = null
+    private var periodicModel: ScreenModel? = null
     private var frameCallback: ((Frame?) -> Unit)? = null
     private var receiverRegistered = false
     private val sampleAgain = Runnable { samplePeriodically() }
+    private val expireManual = Runnable { endSession("屏幕共享已因闲置结束。") }
     private val timeout = Runnable { finishFrame(null) }
     private val screenOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -61,6 +67,7 @@ class ScreenCaptureService : Service() {
     }
     private val projectionEvents = object : MediaProjection.Callback() {
         override fun onStop() {
+            scope.stop()
             main.post { endSession("系统已结束屏幕共享。") }
         }
 
@@ -69,20 +76,26 @@ class ScreenCaptureService : Service() {
         }
 
         override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
-            selectedVisible = isVisible
+            val wasVisible = scope.permit() != null
+            scope.setVisible(isVisible)
             if (!isVisible) {
-                if (reader != null) closeReader()
+                discardLatestImage()
+                finishFrame(null)
                 main.post {
                     if (active) {
                         analysisThread?.interrupt()
                         analysisClient?.cancel()
-                        lastFingerprint = null
-                        ScreenAwareness.clearSummary()
-                        ScreenAwareness.status = "共享的应用当前不可见。"
+                        ScreenAwareness.status = "已暂停 · 共享应用当前不可见。"
+                    }
+                }
+            } else if (!wasVisible) {
+                main.post {
+                    if (isPeriodic() && scope.permit() != null && !ScreenAwareness.reviewVisible) {
+                        ScreenAwareness.status = runningStatus()
+                        scheduleSample(SETTLE)
                     }
                 }
             }
-            if (isVisible && frameCallback != null && reader == null) attachReader()
         }
     }
 
@@ -99,7 +112,7 @@ class ScreenCaptureService : Service() {
             if (active) endSession("已停止。") else stopSelf()
             return START_NOT_STICKY
         }
-        if (active) return START_NOT_STICKY
+        if (active || ending) return START_NOT_STICKY
         @Suppress("DEPRECATION")
         val permission = intent?.getParcelableExtra<Intent>(EXTRA_PERMISSION)
         if (intent == null || permission == null) {
@@ -107,7 +120,8 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
         periodic = intent.getBooleanExtra(EXTRA_PERIODIC, false)
-        periodicEndpoint = if (periodic) ModelEndpointStore.load(this) else null
+        periodicModel = if (periodic) ScreenAwareness.pendingModel else null
+        val approvedModel = ScreenAwareness.pendingModel
         interval = ScreenAwareness.interval(this)
         ScreenAwareness.service = this
         try {
@@ -122,6 +136,10 @@ class ScreenCaptureService : Service() {
                 this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED,
             )
             receiverRegistered = true
+            if (approvedModel?.isCurrent(this) != true) {
+                endSession("模型设置已变化，请重新开启屏幕共享。")
+                return START_NOT_STICKY
+            }
             active = true
             val manager = getSystemService(MediaProjectionManager::class.java)
             val granted = checkNotNull(manager.getMediaProjection(Activity.RESULT_OK, permission))
@@ -143,8 +161,13 @@ class ScreenCaptureService : Service() {
                     if (active) {
                         ScreenAwareness.starting = false
                         if (result.isSuccess) {
-                            ScreenAwareness.status = if (periodic) "每 ${interval} 秒观察一次。" else "正在获取画面…"
-                            if (periodic) main.postDelayed(sampleAgain, SETTLE)
+                            ScreenAwareness.status = if (periodic) runningStatus() else "正在获取画面…"
+                            if (periodic) {
+                                ScreenAwareness.resetObservation()
+                                enablePeriodicReader()
+                                scheduleSample(SETTLE)
+                            }
+                            else renewManualSession()
                             ScreenAwareness.onProjectionReady?.invoke(true)
                         } else endSession("无法开始屏幕共享。")
                     }
@@ -158,101 +181,149 @@ class ScreenCaptureService : Service() {
 
     fun isPeriodic(): Boolean = active && periodic
 
-    fun currentTargetIncludesForeground(): Boolean = selectedVisible
+    fun currentTargetIncludesForeground(): Boolean = active && scope.permit() != null
+
+    private fun canUse(permit: Long): Boolean =
+        scope.allows(permit) && getSystemService(PowerManager::class.java).isInteractive
+
+    internal fun startPeriodic(model: ScreenModel): Boolean {
+        if (!active || periodic || ScreenAwareness.starting || !model.isCurrent(this)) return false
+        periodic = true
+        periodicModel = model
+        main.removeCallbacks(expireManual)
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification())
+        ScreenAwareness.resetObservation()
+        ScreenAwareness.status = runningStatus()
+        enablePeriodicReader()
+        scheduleSample(SETTLE)
+        return true
+    }
+
+    private fun renewManualSession() {
+        main.removeCallbacks(expireManual)
+        main.postDelayed(expireManual, MANUAL_IDLE_TIMEOUT)
+    }
 
     fun updateInterval(seconds: Int) {
+        if (interval == seconds) return
         interval = seconds
         if (isPeriodic()) {
-            main.removeCallbacks(sampleAgain)
-            main.postDelayed(sampleAgain, seconds * 1_000L)
-            if (analysisThread == null) ScreenAwareness.status = "每 ${interval} 秒观察一次。"
+            scheduleSample(seconds * 1_000L)
+            if (analysisThread == null && currentTargetIncludesForeground()) ScreenAwareness.status = runningStatus()
         }
     }
 
-    fun captureOnce(callback: (ByteArray?) -> Unit) {
-        if (!active || request != null) {
+    private fun scheduleSample(delay: Long) {
+        main.removeCallbacks(sampleAgain)
+        main.postDelayed(sampleAgain, delay)
+    }
+
+    private fun runningStatus() = "观察中 · 每 ${interval} 秒检查一次。"
+
+    private fun enablePeriodicReader() {
+        capture.post {
+            periodicReader = true
+            if (reader == null) attachReader()
+        }
+    }
+
+    internal fun captureOnce(callback: (CapturedScreen?) -> Unit) {
+        val permit = scope.permit()
+        if (!active || request != null || permit == null || !canUse(permit)) {
             callback(null)
             return
         }
-        request = callback
-        if (!sampling) takeFrame(manual = true)
+        request = ManualRequest(permit, callback)
+        if (!sampling) takeFrame(permit, manual = true)
     }
 
     private fun samplePeriodically() {
         if (!isPeriodic()) return
-        main.postDelayed(sampleAgain, interval * 1_000L)
-        if (!sampling && analysisThread == null && !ScreenAwareness.reviewVisible) takeFrame(manual = false)
+        if (periodicModel?.isCurrent(this) != true) {
+            endSession("模型设置已变化，请重新开启定时观察。")
+            return
+        }
+        scheduleSample(interval * 1_000L)
+        val permit = scope.permit() ?: return
+        if (canUse(permit) && !sampling && analysisThread == null && !ScreenAwareness.reviewVisible) {
+            ScreenAwareness.markChecked()
+            ScreenAwareness.status = "正在读取共享画面…"
+            takeFrame(permit, manual = false)
+        }
     }
 
-    private fun takeFrame(manual: Boolean) {
+    private fun takeFrame(permit: Long, manual: Boolean) {
         sampling = true
         readingForManual = manual
         if (manual) ScreenAwareness.hideOverlayForCapture?.invoke(true)
         // Allow the consent, settings and overlay surfaces to leave the compositor.
         val (width, height) = displaySize()
         capture.postDelayed({
-            if (display == null) {
-                main.post { onFrame(null) }
+            if (display == null || !canUse(permit)) {
+                main.post { onFrame(permit, null) }
                 return@postDelayed
             }
             if (Build.VERSION.SDK_INT < 34) resize(width, height)
-            frameCallback = { frame -> main.post { onFrame(frame) }; Unit }
+            frameCallback = { frame -> main.post { onFrame(permit, frame) }; Unit }
             capture.postDelayed(timeout, 3_500)
-            if (selectedVisible) attachReader()
+            if (reader == null) attachReader()
+            latestImage?.let { image ->
+                runCatching { encode(image) }.getOrNull()?.let(::finishFrame)
+            }
         }, SETTLE)
     }
 
-    private fun onFrame(frame: Frame?) {
+    private fun onFrame(permit: Long, frame: Frame?) {
         if (!active) return
         sampling = false
+        val currentFrame = frame?.takeIf { canUse(permit) }
         if (readingForManual) ScreenAwareness.hideOverlayForCapture?.invoke(false)
         if (readingForManual) {
-            val callback = request
+            val manual = request
             request = null
-            if (!periodic) endSession(if (frame == null) "共享画面不可用。" else "已取得一帧。")
-            callback?.invoke(frame?.jpeg)
+            if (!periodic && canUse(permit)) {
+                renewManualSession()
+                ScreenAwareness.status = "屏幕共享已就绪，仅在你主动请求时看屏。"
+            }
+            manual?.callback?.invoke(currentFrame?.jpeg?.let { CapturedScreen(it) { canUse(permit) } })
             return
         }
-        if (request != null) takeFrame(manual = true)
-        if (ScreenAwareness.reviewVisible) return
-        if (frame == null) {
-            ScreenAwareness.status = "共享画面暂不可用。"
+        request?.let { takeFrame(it.permit, manual = true) }
+        if (ScreenAwareness.reviewVisible || !canUse(permit)) return
+        if (currentFrame == null) {
+            ScreenAwareness.status = "本次未取得画面，下个周期会重试。"
             return
         }
-        if (lastFingerprint?.let { similar(it, frame.fingerprint) } == true) return
-        analyze(frame)
+        analyze(permit, currentFrame)
     }
 
-    private fun analyze(frame: Frame) {
-        val endpoint = ModelEndpointStore.load(this)
-        if (endpoint != periodicEndpoint) {
+    private fun analyze(permit: Long, frame: Frame) {
+        val jpeg = frame.jpeg
+        val model = periodicModel
+        if (model == null || !model.isCurrent(this)) {
             endSession("模型设置已变化，请重新开启定时观察。")
             return
         }
-        val apiKey = ApiKeyVault.read(this)
-        if (!EndpointAddressPolicy.isConfigured(endpoint.url, endpoint.model, !apiKey.isNullOrBlank())) {
-            ScreenAwareness.status = "请配置支持图片输入的模型。"
-            return
-        }
         val client = ChatCompletionsClient()
+        val canSend = { model.isCurrent(this) && canUse(permit) }
+        ScreenAwareness.status = "正在分析画面…"
         analysisClient = client
         analysisThread = Thread({
-            val result = runCatching { client.observeScreen(endpoint, checkNotNull(apiKey), frame.jpeg) }
+            val result = runCatching { model.observe(client, jpeg, canSend) }
             val interrupted = Thread.currentThread().isInterrupted
             main.post {
                 if (analysisClient !== client) return@post
                 analysisClient = null
                 analysisThread = null
-                if (!isPeriodic() || interrupted) return@post
-                if (ModelEndpointStore.load(this) != endpoint) {
+                if (!isPeriodic() || interrupted || !canUse(permit)) return@post
+                if (!model.isCurrent(this)) {
                     endSession("模型设置已变化，请重新开启定时观察。")
                     return@post
                 }
                 val summary = result.getOrNull()
                 if (!summary.isNullOrBlank()) {
-                    lastFingerprint = frame.fingerprint
-                    ScreenAwareness.recordSummary(summary, endpoint)
-                    ScreenAwareness.status = "每 ${interval} 秒观察一次。"
+                    ScreenAwareness.recordSummary(summary, canSend)
+                    ScreenAwareness.status = runningStatus()
                 } else {
                     ScreenAwareness.status = "未取得摘要，请检查模型是否支持图片输入。"
                 }
@@ -262,33 +333,48 @@ class ScreenCaptureService : Service() {
 
     private fun attachReader() {
         try {
-            val source = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            val source = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, if (periodicReader) 3 else 2)
             reader = source
             source.setOnImageAvailableListener({ available ->
                 if (available !== reader) return@setOnImageAvailableListener
                 val image = runCatching { available.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
-                val result = image.use { runCatching { encode(it) }.getOrNull() }
+                if (scope.permit() == null) {
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
+                val result = if (periodicReader) {
+                    discardLatestImage()
+                    latestImage = image
+                    if (frameCallback == null) null else runCatching { encode(image) }.getOrNull()
+                } else image.use { runCatching { encode(it) }.getOrNull() }
                 if (result != null) finishFrame(result)
             }, capture)
             display?.surface = source.surface
         } catch (_: Exception) {
+            closeReader()
             finishFrame(null)
         }
     }
 
     private fun finishFrame(frame: Frame?) {
         capture.removeCallbacks(timeout)
-        closeReader()
+        if (!periodicReader) closeReader()
         val callback = frameCallback
         frameCallback = null
         callback?.invoke(frame)
     }
 
     private fun closeReader() {
+        discardLatestImage()
         val source = reader ?: return
         reader = null
         runCatching { display?.surface = null }
         source.close()
+    }
+
+    private fun discardLatestImage() {
+        latestImage?.close()
+        latestImage = null
     }
 
     private fun resize(contentWidth: Int, contentHeight: Int) {
@@ -299,27 +385,28 @@ class ScreenCaptureService : Service() {
         width = w
         height = h
         val resized = runCatching { display?.resize(w, h, resources.displayMetrics.densityDpi) }.isSuccess
-        if (resized && frameCallback != null && selectedVisible) attachReader()
+        if (resized && (periodicReader || frameCallback != null && scope.permit() != null)) attachReader()
     }
 
-    private data class Frame(val jpeg: ByteArray, val fingerprint: IntArray)
+    private data class Frame(val jpeg: ByteArray)
 
     private fun encode(image: Image): Frame? {
         val plane = image.planes[0]
         val buffer = plane.buffer
         val stride = plane.rowStride
         val pixel = plane.pixelStride
-        val fingerprint = IntArray(16 * 16)
         var anyColor = false
-        for (index in fingerprint.indices) {
+        for (index in 0 until 16 * 16) {
             val x = (2 * (index % 16) + 1) * image.width / 32
             val y = (2 * (index / 16) + 1) * image.height / 32
             val offset = y * stride + x * pixel
             val r = buffer.get(offset).toInt() and 255
             val g = buffer.get(offset + 1).toInt() and 255
             val b = buffer.get(offset + 2).toInt() and 255
-            anyColor = anyColor || r != 0 || g != 0 || b != 0
-            fingerprint[index] = (r * 3 + g * 6 + b) / 10
+            if (r != 0 || g != 0 || b != 0) {
+                anyColor = true
+                break
+            }
         }
         if (!anyColor) return null
         val paddedWidth = stride / pixel
@@ -331,19 +418,13 @@ class ScreenCaptureService : Service() {
             try {
                 val output = ByteArrayOutputStream()
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)) return null
-                return Frame(output.toByteArray(), fingerprint)
+                return Frame(output.toByteArray())
             } finally {
                 if (bitmap !== padded) bitmap.recycle()
             }
         } finally {
             padded.recycle()
         }
-    }
-
-    private fun similar(a: IntArray, b: IntArray): Boolean {
-        // Disregard small clock/animation changes while retaining changes to content.
-        return a.indices.sumOf { abs(a[it] - b[it]) } <= a.size * 3 &&
-            a.indices.count { abs(a[it] - b[it]) >= 24 } <= 3
     }
 
     @Suppress("DEPRECATION")
@@ -366,8 +447,8 @@ class ScreenCaptureService : Service() {
 
     private fun notification() = NotificationCompat.Builder(this, CHANNEL)
         .setSmallIcon(android.R.drawable.ic_menu_camera)
-        .setContentTitle(if (periodic) "蓝鳍正在定时观察屏幕" else "蓝鳍正在看一眼屏幕")
-        .setContentText(if (periodic) "点击可调整观察间隔" else "正在获取单张截图")
+        .setContentTitle(if (periodic) "蓝鳍正在定时观察屏幕" else "蓝鳍屏幕共享已开启")
+        .setContentText(if (periodic) "点击可调整观察间隔" else "仅在你主动请求时取一帧")
         .setContentIntent(PendingIntent.getActivity(
             this, 135, ScreenAwarenessActivity.settingsIntent(this),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -381,6 +462,9 @@ class ScreenCaptureService : Service() {
         .build()
 
     internal fun endSession(status: String) {
+        if (ending) return
+        ending = true
+        scope.stop()
         if (ScreenAwareness.service === this) {
             ScreenAwareness.service = null
             ScreenAwareness.starting = false
@@ -391,16 +475,17 @@ class ScreenCaptureService : Service() {
         if (active) {
             active = false
             main.removeCallbacks(sampleAgain)
+            main.removeCallbacks(expireManual)
             analysisThread?.interrupt()
             analysisClient?.cancel()
             analysisClient = null
             analysisThread = null
-            lastFingerprint = null
+            periodicModel = null
             if (sampling && readingForManual) ScreenAwareness.hideOverlayForCapture?.invoke(false)
             sampling = false
             val callback = request
             request = null
-            callback?.invoke(null)
+            callback?.callback?.invoke(null)
             val granted = projection
             projection = null
             capture.removeCallbacksAndMessages(null)
@@ -431,5 +516,6 @@ class ScreenCaptureService : Service() {
         private const val NOTIFICATION = 202
         private const val ACTION_STOP = "com.wwkhub.bluefin.STOP_SCREEN_CAPTURE"
         private const val SETTLE = 260L
+        private const val MANUAL_IDLE_TIMEOUT = 10 * 60_000L
     }
 }

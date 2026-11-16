@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">蓝鳍</string>
+    <string name="app_name">鳍遇</string>
     <string name="loading">正在醒来…</string>
     <string name="load_timeout">预览加载超时。请重试。若仍失败，确认安装包里包含 bluefin/index.html。</string>
     <string name="missing_route_b">没有找到 bluefin/index.html。可玩预览需要完整资源：index.html、figure.js、figure.json、kit/ 和 assets/。</string>
@@ -29,6 +29,12 @@
     <string name="orb_hide">隐藏悬浮窗</string>
     <string name="orb_return">回到应用</string>
     <string name="orb_actions">动作</string>
+    <string name="orb_appearance_switch">切换外观</string>
+    <string name="orb_appearance_manage">管理外观</string>
+    <string name="orb_appearance_selected">%1$s · 当前使用</string>
+    <string name="orb_detail_back">返回</string>
+    <string name="orb_reply_full">完整回复</string>
+    <string name="orb_reply_full_short">全文</string>
     <string name="orb_size">角色大小</string>
     <string name="orb_orb_size">小球大小</string>
     <string name="orb_opacity">透明度</string>
@@ -48,7 +54,7 @@
     <string name="reset_confirm">重置</string>
     <string name="cancel">取消</string>
     <string name="about_title">关于</string>
-    <string name="about">版本 %1$s\n\n蓝鳍应用内预览，侧载安装，可离线互动。默认角色原画和动作帧来自本仓库 WWK-HUB/coopanion-bluefin-native。互动和底边走动来自 Pal AI Lab 的 Coopanion 引擎（preview/kit，AGPL），见仓库 THIRD_PARTY_NOTICES。\n\n本版可以在应用内互动，也可以在允许「显示在其他应用上层」后，让蓝鳍以悬浮窗浮在其他应用上走动、被戳和拖拽。设置「角色」中可以导入 Coopanion 兼容的角色外观包，并在内置蓝鳍和已导入外观之间切换；切换外观不会改动模型配置、对话记录或人设。文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；应用只为这次对话申请网络权限，密钥只保存在本机应用私有存储，可随时在设置里清除。不含语音、电脑控制、内置官方密钥。</string>
+    <string name="about">版本 %1$s\n\n鳍遇是一款可离线互动的安卓桌宠应用，默认角色是蓝鳍。默认角色原画和动作帧来自本仓库 WWK-HUB/coopanion-bluefin-native。互动和底边走动来自 Pal AI Lab 的 Coopanion 引擎（preview/kit，AGPL），见仓库 THIRD_PARTY_NOTICES。\n\n本版可以在应用内互动，也可以在允许「显示在其他应用上层」后，让蓝鳍以悬浮窗浮在其他应用上走动、被戳和拖拽。设置「角色」中可以导入 Coopanion 兼容的角色外观包，并在内置蓝鳍和已导入外观之间切换；切换外观不会改动模型配置、对话记录或人设。文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理，密钥只保存在本机应用私有存储，可随时在设置里清除。不含语音、电脑控制、内置官方密钥。</string>
     <string name="open_chat">对话</string>
     <string name="model_section_title">模型</string>
     <string name="model_provider">服务商</string>
@@ -115,11 +121,11 @@
     <string name="persona_restore_title">恢复默认人设</string>
     <string name="persona_restore_message">会用默认人设替换当前内容，下一句对话生效。</string>
     <string name="persona_restore_confirm">恢复</string>
-    <string name="notif_channel">蓝鳍</string>
-    <string name="notif_channel_desc">用来回到应用里的蓝鳍</string>
-    <string name="notif_title">蓝鳍</string>
-    <string name="notif_text">点按回到蓝鳍</string>
-    <string name="notif_return">回到蓝鳍</string>
+    <string name="notif_channel">@string/app_name</string>
+    <string name="notif_channel_desc">从通知栏返回应用或切换悬浮窗</string>
+    <string name="notif_title">@string/app_name</string>
+    <string name="notif_text">点按回到鳍遇</string>
+    <string name="notif_return">回到鳍遇</string>
     <string name="notif_overlay_show">显示悬浮窗</string>
     <string name="notif_overlay_hide">隐藏悬浮窗</string>
     <string name="overlay_button">悬浮窗</string>
@@ -135,7 +141,7 @@
     <string name="overlay_permission_go">去开启</string>
     <string name="overlay_permission_later">先在应用内用</string>
     <string name="overlay_permission_message">开启后蓝鳍可以像桌宠一样浮在屏幕上走动、被戳和拖拽。你可以随时在设置里关闭。若暂不允许，仍可在应用内互动。</string>
-    <string name="overlay_permission_title">允许蓝鳍显示在其他应用上层？</string>
+    <string name="overlay_permission_title">允许鳍遇显示在其他应用上层？</string>
     <string name="tip_step">%1$d / %2$d</string>
     <string name="tip_1">轻点角色是戳一戳。睡觉时轻点可以戳醒。</string>
     <string name="tip_2">在头上来回滑动是摸头。按住并拖动可以把他提起。</string>
@@ -192,4 +198,7 @@
     <string name="speech_click_through_fallback">点击穿透已开，气泡暂不显示；请在记录里继续</string>
     <string name="speech_unavailable_fallback">气泡暂不可用，回复仍在『记录』中。</string>
     <string name="speech_busy_fallback">正在回复，可先停止</string>
+    <string name="orb_stage_failed">角色加载失败，请从小球切换外观重试。</string>
+    <string name="orb_appearance_retry">外观列表加载失败，点此重试</string>
+    <string name="orb_auto_rest">两分钟后自动休息</string>
 </resources>

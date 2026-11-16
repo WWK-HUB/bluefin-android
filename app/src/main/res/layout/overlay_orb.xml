@@ -16,53 +16,60 @@
         android:visibility="gone">
 
         <LinearLayout
+            android:id="@+id/overlay_orb_pages"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/overlay_open_chat"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/open_chat"
-                android:textColor="@android:color/white" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/overlay_open_records"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:minHeight="48dp"
-                android:text="@string/orb_records"
-                android:textColor="@color/ink" />
-
             <LinearLayout
+                android:id="@+id/overlay_orb_main"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:orientation="vertical">
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/overlay_look_screen"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="0dp"
+                    android:id="@+id/overlay_open_chat"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:minHeight="48dp"
-                    android:text="@string/look_screen"
-                    android:textColor="@color/ink" />
+                    android:text="@string/open_chat"
+                    android:textColor="@android:color/white" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/overlay_screen_settings"
+                    android:id="@+id/overlay_open_records"
                     style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
+                    android:layout_marginTop="2dp"
                     android:minHeight="48dp"
-                    android:text="@string/screen_awareness"
+                    android:text="@string/orb_records"
                     android:textColor="@color/ink" />
-            </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/overlay_look_screen"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:minHeight="48dp"
+                        android:text="@string/look_screen"
+                        android:textColor="@color/ink" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/overlay_screen_settings"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:minHeight="48dp"
+                        android:text="@string/screen_awareness"
+                        android:textColor="@color/ink" />
+              </LinearLayout>
 
             <LinearLayout
                 android:id="@+id/overlay_orb_unconfigured"
@@ -133,26 +140,35 @@
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_open_actions"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:minHeight="48dp"
+                    android:paddingHorizontal="4dp"
+                    android:text="@string/orb_actions" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/overlay_change_character"
                     style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:minWidth="0dp"
                     android:minHeight="48dp"
-                    android:text="@string/orb_character_change"
-                    android:textColor="@color/muted"
-                    android:textSize="12sp" />
+                    android:paddingHorizontal="4dp"
+                    android:text="@string/orb_appearance_switch" />
             </LinearLayout>
-
-            <GridLayout
-                android:id="@+id/overlay_actions_grid"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:alignmentMode="alignMargins"
-                android:columnCount="3"
-                android:useDefaultMargins="false" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -171,8 +187,10 @@
 
                 <TextView
                     android:id="@+id/overlay_size_value"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="end"
                     android:text="0.85"
                     android:textColor="@color/muted"
                     android:textSize="13sp" />
@@ -180,6 +198,7 @@
 
             <SeekBar
                 android:id="@+id/overlay_size_slider"
+                    android:contentDescription="@string/orb_size"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:max="80"
@@ -202,8 +221,10 @@
 
                 <TextView
                     android:id="@+id/overlay_opacity_value"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="end"
                     android:text="100%"
                     android:textColor="@color/muted"
                     android:textSize="13sp" />
@@ -211,6 +232,7 @@
 
             <SeekBar
                 android:id="@+id/overlay_opacity_slider"
+                    android:contentDescription="@string/orb_opacity"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:max="100"
@@ -255,8 +277,10 @@
 
                 <TextView
                     android:id="@+id/overlay_orb_size_value"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="end"
                     android:text="48dp"
                     android:textColor="@color/muted"
                     android:textSize="13sp" />
@@ -264,6 +288,7 @@
 
             <SeekBar
                 android:id="@+id/overlay_orb_size_slider"
+                    android:contentDescription="@string/orb_orb_size"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:max="28"
@@ -277,6 +302,15 @@
                 android:layout_marginTop="4dp"
                 android:minHeight="48dp"
                 android:text="@string/orb_roam"
+                android:textColor="@color/ink"
+                android:textSize="13sp" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/overlay_auto_rest"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/orb_auto_rest"
                 android:textColor="@color/ink"
                 android:textSize="13sp" />
 
@@ -316,6 +350,69 @@
                 android:minHeight="48dp"
                 android:text="@string/orb_return"
                 android:textColor="@color/ink" />
+          </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/overlay_orb_detail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_orb_detail_back"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/orb_detail_back" />
+
+                <TextView
+                    android:id="@+id/overlay_orb_detail_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="8dp"
+                    android:paddingBottom="8dp"
+                    android:textColor="@color/ink"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <GridLayout
+                    android:id="@+id/overlay_actions_grid"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:alignmentMode="alignMargins"
+                    android:columnCount="2"
+                    android:useDefaultMargins="false"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/overlay_appearance_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_reply_stop"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/chat_stop"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/overlay_reply_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="5dp"
+                    android:padding="8dp"
+                    android:textColor="@color/ink"
+                    android:textIsSelectable="true"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 

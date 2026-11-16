@@ -12,10 +12,10 @@ class ReleaseIdentityTest {
         val strings = File("src/main/res/values/strings.xml").readText()
         val line = strings.lineSequence().first { it.contains("name=\"app_name\"") }
         val name = Regex(">([^<]+)<").find(line)?.groupValues?.get(1).orEmpty()
-        assertEquals("蓝鳍", name)
+        assertEquals("鳍遇", name)
         assertEquals(2, name.length)
-        assertEquals(0x84DD, name[0].code)
-        assertEquals(0x9CCD, name[1].code)
+        assertEquals(0x9CCD, name[0].code)
+        assertEquals(0x9047, name[1].code)
         listOf("蓝鲗", "蓝鳐", "鳐", "鱚", "鳞", "蓝鳞").forEach { forbidden ->
             assertFalse("strings.xml must not contain $forbidden", strings.contains(forbidden))
         }
@@ -24,8 +24,8 @@ class ReleaseIdentityTest {
     @Test
     fun versionAndPackageMatchTheRelease() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionName = \"0.9.0\""))
-        assertTrue(gradle.contains("versionCode = 24"))
+        assertTrue(gradle.contains("versionName = \"0.9.1-rc1\""))
+        assertTrue(gradle.contains("versionCode = 25"))
         assertFalse(gradle.contains("0.6.0-rc3"))
         assertFalse(gradle.contains("versionCode = 21"))
         assertTrue(gradle.contains("applicationId = \"com.wwkhub.bluefin\""))

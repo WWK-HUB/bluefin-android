@@ -277,15 +277,15 @@ class OverlayLayoutTest {
     @Test
     fun guideCopyAndVersionMatchTheApprovedScope() {
         val strings = File("src/main/res/values/strings.xml").readText()
-        assertTrue(strings.contains("允许蓝鳍显示在其他应用上层？"))
+        assertTrue(strings.contains("允许鳍遇显示在其他应用上层？"))
         assertTrue(strings.contains("开启后蓝鳍可以像桌宠一样浮在屏幕上走动、被戳和拖拽。你可以随时在设置里关闭。若暂不允许，仍可在应用内互动。"))
         assertTrue(strings.contains(">去开启<"))
         assertTrue(strings.contains(">先在应用内用<"))
         assertTrue(strings.contains(">显示悬浮窗<"))
         assertTrue(strings.contains(">隐藏悬浮窗<"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionName = \"0.9.0\""))
-        assertTrue(gradle.contains("versionCode = 24"))
+        assertTrue(gradle.contains("versionName = \"0.9.1-rc1\""))
+        assertTrue(gradle.contains("versionCode = 25"))
         assertTrue(strings.contains("重新询问悬浮窗权限"))
         assertTrue(strings.contains(">透明度<"))
         assertTrue(strings.contains(">实<"))

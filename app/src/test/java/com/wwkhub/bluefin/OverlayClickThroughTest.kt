@@ -141,7 +141,7 @@ class OverlayClickThroughTest {
             "attached = true",
             "layoutOrb()",
             "loadedPackKey = cheapPackKey()",
-            "web.loadUrl(cheapStageUrl())",
+            "loadStage(cheapStageUrl())",
             "handler.post { if (attached && !destroyed) syncFromPrefs() }",
         )
         var cursor = -1

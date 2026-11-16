@@ -134,6 +134,7 @@
   }
 
   function ready() {
+    if (window.__bluefinLoadFailed) return false;
     if (window.__BLUEFIN_READY === true) return true;
     if (window.bluefin && window.bluefin.ready === true) return true;
     if (window.qa && window.qa.ready === true) return true;
@@ -273,7 +274,7 @@
   function applyRoam(body) {
     if (!body || typeof body.set !== "function") return;
     var mode = desiredRoam();
-    body.set({ roam: mode });
+    body.set({ roam: mode, quietRoam: true });
     boundBody = body;
     if (typeof body.do !== "function" || !body.layout) return;
     try {
@@ -285,20 +286,12 @@
 
   function applySize(scale) {
     var s = normalizeScale(scale);
+    var changed = window.__bluefinForceScale !== s;
     // These stay the user/saved scale even when the display box is capped.
     window.__bluefinSize = s;
     window.__bluefinForceScale = s;
-    fitStage();
-    var stage = document.querySelector("#stage");
-    if (stage) {
-      if (window.__bluefinOverlay) {
-        // overlay-stage.js sets the fixed full-height stage geometry.
-        stage.style.height = "";
-      } else {
-        stage.style.height = displayStageHeight(s) + "px";
-      }
-    }
-    window.dispatchEvent(new Event("resize"));
+    // The stage viewport does not change when the character is resized.
+    if (changed) window.qa?.body?.resize?.();
   }
 
   // Character drawing opacity only. This is deliberately applied to the figure
@@ -324,6 +317,7 @@
   }
 
   function applyPrefs(roamOn, scale, hidden, opacity) {
+    var previousRoam = desiredRoam();
     window.__bluefinHidden = !!hidden;
     window.__bluefinRoam = roamOn ? "free" : "off";
     var stage = document.querySelector("#stage");
@@ -331,7 +325,10 @@
     if (window.qa && typeof window.qa.manual === "function") window.qa.manual(!!hidden);
     applySize(scale);
     applyCharacterOpacity(opacity == null ? window.__bluefinForceOpacity : opacity);
-    applyRoam(window.qa && window.qa.body);
+    var body = window.qa && window.qa.body;
+    if (body !== boundBody || previousRoam !== desiredRoam()) applyRoam(body);
+    window.__bluefinCharacterVisible = !hidden && !window.__bluefinHitsDisabled;
+    window.qa?.setVisible?.(window.__bluefinCharacterVisible);
   }
 
   setInterval(function () {

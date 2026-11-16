@@ -68,12 +68,19 @@ export function paint(ctx,images,fr){
  const breath=calm?Math.sin(t*(fr.mode==='sleep'?1.7:2.4)):0;
  const gaze=pose==='neutral'||pose==='talk'?clip(fr.look?.[0]||0,-5,5):0;
  const tremble=(fr.face==='scared'||fr.gesture?.kind==='shiver')?Math.sin(t*55)*1.1:0;
- for(let y=0;y<512;y+=4){
-   const head=Math.max(0,1-Math.abs(y-185)/145);
-   const body=Math.max(0,1-Math.abs(y-345)/140);
-   const dx=gaze*.55*head+tremble*head;
-   const dy=breath*(head*.7-body*.6);
-   ctx.drawImage(im,0,y,512,4,dx,y+dy,512,4.4);
+ if(!breath&&!gaze&&!tremble) {
+   ctx.drawImage(im,0,0);
+ } else {
+   // The deformation is at most a few source pixels. A coarser mesh keeps
+   // the motion while reducing Canvas calls at the phone's display size.
+   for(let y=0;y<512;y+=16){
+     const center=y+8;
+     const head=Math.max(0,1-Math.abs(center-185)/145);
+     const body=Math.max(0,1-Math.abs(center-345)/140);
+     const dx=gaze*.55*head+tremble*head;
+     const dy=breath*(head*.7-body*.6);
+     ctx.drawImage(im,0,y,512,16,dx,y+dy,512,16.4);
+   }
  }
  if(fr.face==='wink'&&['talk','neutral'].includes(pose)){
    // Copy the closed eye from the supplied painted blink pose; keep the other eye open.

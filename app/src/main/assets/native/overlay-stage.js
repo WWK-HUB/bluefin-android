@@ -131,14 +131,19 @@
         window.__bluefinRoamPref = roamOn ? "free" : "off";
         if (!roamOn) pendingResume = false;
       }
+      if (window.__bluefinAsleep && !restPrefs) {
+        var args = Array.prototype.slice.call(arguments);
+        args[0] = false;
+        return apply.apply(this, args);
+      }
       return apply.apply(this, arguments);
     };
     watched.__bluefinRoamWatched = true;
     native.applyPrefs = watched;
   }
 
-  function pt(x, y) {
-    return { x: x, y: y, t: Date.now() };
+  function pt(x, y, time) {
+    return { x: x, y: y, t: Number.isFinite(time) ? time : performance.now() };
   }
 
   function grab(start, at) {
@@ -171,13 +176,13 @@
     },
   });
 
-  function pointer(type, x, y) {
-    if (window.__bluefinHitsDisabled) return;
+  function pointer(type, x, y, time) {
+    if (window.__bluefinHitsDisabled && type !== 'cancel') return;
     var b = body();
     if (!b) return;
     if (type === "down") {
       if (gestures.active()) return;
-      var start = pt(x, y);
+      var start = pt(x, y, time);
       window.__bluefinAllowRest = false;
       if (window.__bluefinAsleep) {
         window.__bluefinAsleep = "";
@@ -188,11 +193,11 @@
       return;
     }
     if (type === "move") {
-      gestures.move(pt(x, y));
+      gestures.move(pt(x, y, time));
       return;
     }
     if (type === "up" || type === "cancel") {
-      gestures.up(pt(x, y), type === "cancel");
+      gestures.up(pt(x, y, time), type === "cancel");
     }
   }
 
@@ -255,36 +260,14 @@
     }, 1400);
   }
 
-  function setScale(value) {
-    var s = Number(value);
-    if (!isFinite(s)) s = 0.85;
-    s = Math.max(0.50, Math.min(1.30, Math.round(s * 100) / 100));
-    window.__bluefinForceScale = s;
-    var b = body();
-    if (b && typeof b.resize === "function") b.resize();
-    publish();
-  }
-
-  // Character drawing opacity only; the overlay window alpha stays untouched.
-  // At 0 the character is invisible, so its hits are dropped from the overlay
-  // publish and gestures are disabled until the user raises opacity again.
-  function setOpacity(value) {
-    var o = Number(value);
-    if (!isFinite(o)) o = 1;
-    o = Math.max(0, Math.min(1, o));
-    window.__bluefinForceOpacity = o;
-    window.__bluefinCharacterOpacity = o;
-    window.__bluefinHitsDisabled = o <= 0;
-    var root = document.querySelector("#root");
-    if (root && root.style) {
-      root.style.opacity = String(o);
-      root.style.pointerEvents = o <= 0 ? "none" : "";
-    }
-    var stage = document.querySelector("#stage");
-    if (stage && stage.style) stage.style.pointerEvents = o <= 0 ? "none" : "";
-  }
+  var monitoring = true;
+  var layoutTimer = 0;
+  var lastGeometryAt = -Infinity;
+  var lastMode = '';
 
   function publish() {
+    if (!monitoring || document.hidden) return;
+    watchPrefs();
     var b = body();
     if (!b || !b.layout || !window.BluefinOverlay || !window.BluefinOverlay.layout) return;
     var L = b.layout();
@@ -295,6 +278,10 @@
         if (typeof b.do === "function") b.do("walk");
       }
     }
+    var now = performance.now();
+    if (!L.moving && L.mode === lastMode && now - lastGeometryAt < 320) return;
+    lastGeometryAt = now;
+    lastMode = L.mode;
     var stage = document.querySelector("#stage");
     var s = (typeof window.__bluefinForceScale === "number") ? window.__bluefinForceScale : 0.85;
     var minX = 104 * s + 8;
@@ -304,7 +291,9 @@
       return { x: h.x, y: h.y, r: h.r };
     });
     window.BluefinOverlay.layout(JSON.stringify({
+      generation: window.__bluefinStageGeneration,
       mode: L.mode || "",
+      moving: !!L.moving,
       facing: L.facing > 0 ? 1 : -1,
       x: L.x || 0,
       minX: minX,
@@ -330,23 +319,36 @@
       "width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;",
       "background:transparent!important;border:0!important}"
     ].join("");
-    window.dispatchEvent(new Event("resize"));
+  }
+
+  function refreshMonitoring() {
+    if (layoutTimer) clearInterval(layoutTimer);
+    layoutTimer = 0;
+    if (!monitoring || document.hidden) return;
+    publish();
+    layoutTimer = setInterval(publish, 80);
+  }
+
+  function setMonitoring(active) {
+    if (monitoring === active) return;
+    monitoring = active;
+    if (!active) gestures.up(pt(0, 0), true);
+    lastGeometryAt = -Infinity;
+    refreshMonitoring();
   }
 
   watchPrefs();
   fit();
-  setInterval(function () {
-    fit();
-    publish();
-  }, 80);
+  window.dispatchEvent(new Event("resize"));
+  document.addEventListener("visibilitychange", refreshMonitoring);
+  refreshMonitoring();
 
   window.__bluefinOverlay = {
     pointer: pointer,
     walkTo: walkTo,
     act: act,
     rest: rest,
-    setScale: setScale,
-    setOpacity: setOpacity,
+    setMonitoring: setMonitoring,
     publish: publish
   };
 })();

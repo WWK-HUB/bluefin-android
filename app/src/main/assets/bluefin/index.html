@@ -74,6 +74,37 @@ let compact = false;
 let manual = false;
 let scale = 1;
 let demoTimer = 0;
+let characterVisible = true;
+let frame = 0;
+let prev = 0;
+
+function scheduleFrame() {
+  if (!frame && body && characterVisible && !document.hidden && !paused && !manual) {
+    frame = requestAnimationFrame(tick);
+  }
+}
+
+function updateFrameLoop() {
+  if (!characterVisible || document.hidden || paused || manual) {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    prev = 0;
+    return;
+  }
+  scheduleFrame();
+}
+
+function tick(t) {
+  frame = 0;
+  if (!body || !characterVisible || document.hidden || paused || manual) return;
+  const resting = body.layout().mode === 'sleep';
+  if (!prev || t - prev >= (resting ? 99 : 16)) {
+    body.step(prev ? Math.min(0.1, (t - prev) / 1000) : 0);
+    prev = t;
+  }
+  if (!window.__bluefinNative) showStatus();
+  scheduleFrame();
+}
 
 function preferredScale() {
   if (typeof window.__bluefinForceScale === 'number' && Number.isFinite(window.__bluefinForceScale)) {
@@ -164,6 +195,7 @@ async function main() {
     meta = await res.json();
   } catch (err) {
     document.querySelector('#status').textContent = '载入失败：' + (err && err.message ? err.message : err);
+    window.__bluefinLoadFailed = true;
     console.error(err);
     return;
   }
@@ -213,6 +245,8 @@ async function main() {
     body.set({ roam: 'off' });
     body.step(1 / 60);
     showStatus();
+    characterVisible = window.__bluefinCharacterVisible !== false;
+    updateFrameLoop();
     return body;
   }
 
@@ -220,7 +254,8 @@ async function main() {
     events,
     get body() { return body; },
     get meta() { return meta; },
-    manual(v) { manual = v; },
+    manual(v) { manual = v; updateFrameLoop(); },
+    setVisible(v) { characterVisible = v; updateFrameLoop(); },
     advance(n = 1) { for (let i = 0; i < n; i++) body.step(1 / 60); },
     snapshot() {
       return {
@@ -238,11 +273,13 @@ async function main() {
     mark('');
     reset().catch((err) => {
       document.querySelector('#status').textContent = '载入失败：' + (err && err.message ? err.message : err);
-      console.error(err);
+      window.__bluefinLoadFailed = true;
+    console.error(err);
     });
   });
   document.querySelector('#pause').addEventListener('click', (e) => {
     paused = !paused;
+    updateFrameLoop();
     e.currentTarget.textContent = paused ? '继续' : '暂停';
   });
   document.querySelector('#size').addEventListener('click', () => {
@@ -268,22 +305,16 @@ async function main() {
     scale = compact ? smallerScale() : preferredScale();
     if (body) body.resize();
   });
-  let prev = performance.now();
-  function tick(t) {
-    if (!paused && !manual && body) body.step(Math.min(0.04, (t - prev) / 1000));
-    prev = t;
-    if (body) showStatus();
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
+  document.addEventListener('visibilitychange', updateFrameLoop);
   try {
     await reset();
   } catch (err) {
     document.querySelector('#status').textContent = '载入失败：' + (err && err.message ? err.message : err);
+    window.__bluefinLoadFailed = true;
     console.error(err);
     return;
   }
-  window.qa.ready = true;
+  window.qa.ready = !window.__bluefinLoadFailed;
 }
 main();
 </script>

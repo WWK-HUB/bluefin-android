@@ -15,35 +15,43 @@ import androidx.security.crypto.MasterKey
 internal object ApiKeyVault {
     private const val TAG = "BluefinKeyVault"
     private const val FILE = "bluefin_key_vault"
+    private const val LEGACY_FILE = "bluefin_key_fallback"
     private const val KEY_SECRET = "api_key"
 
     @Volatile
     private var cached: SharedPreferences? = null
 
-    fun save(context: Context, key: String) {
+    @Synchronized
+    fun save(context: Context, key: String): Boolean {
         val trimmed = key.trim()
-        if (trimmed.isEmpty()) return
-        val prefs = secure(context)
-        if (prefs != null) {
-            prefs.edit().putString(KEY_SECRET, trimmed).apply()
-        } else {
-            // Extremely rare fallback on devices with a broken Keystore. The file
-            // is still app-private and is removed with the app.
-            fallback(context).edit().putString(KEY_SECRET, trimmed).apply()
-        }
+        if (trimmed.isEmpty()) return false
+        val prefs = secure(context) ?: return false
+        if (!runCatching { prefs.edit().putString(KEY_SECRET, trimmed).commit() }.getOrDefault(false)) return false
+        legacy(context).edit().remove(KEY_SECRET).apply()
         ModelEndpointStore.markKeySaved(context, true)
+        return true
     }
 
+    @Synchronized
     fun read(context: Context): String? {
-        val encrypted = secure(context)?.getString(KEY_SECRET, null)
-        if (!encrypted.isNullOrBlank()) return encrypted
-        return fallback(context).getString(KEY_SECRET, null)?.takeIf { it.isNotBlank() }
+        val encrypted = runCatching { secure(context)?.getString(KEY_SECRET, null) }.getOrNull()
+        val old = legacy(context).getString(KEY_SECRET, null)?.takeIf { it.isNotBlank() }
+        if (!encrypted.isNullOrBlank()) {
+            if (old != null) legacy(context).edit().remove(KEY_SECRET).apply()
+            return encrypted
+        }
+        return old?.takeIf { save(context, it) }
     }
 
-    fun clear(context: Context) {
-        secure(context)?.edit()?.remove(KEY_SECRET)?.apply()
-        fallback(context).edit().remove(KEY_SECRET).apply()
+    @Synchronized
+    fun clear(context: Context): Boolean {
+        val app = context.applicationContext
+        val removedSecure = app.deleteSharedPreferences(FILE)
+        cached = null
+        val removedLegacy = app.deleteSharedPreferences(LEGACY_FILE)
+        if (!removedSecure || !removedLegacy) return false
         ModelEndpointStore.markKeySaved(context, false)
+        return true
     }
 
     private fun secure(context: Context): SharedPreferences? {
@@ -62,12 +70,12 @@ internal object ApiKeyVault {
             )
             cached = prefs
             prefs
-        } catch (error: Exception) {
-            Log.w(TAG, "encrypted key storage unavailable", error)
+        } catch (_: Exception) {
+            Log.w(TAG, "encrypted key storage unavailable")
             null
         }
     }
 
-    private fun fallback(context: Context): SharedPreferences =
-        context.applicationContext.getSharedPreferences("bluefin_key_fallback", Context.MODE_PRIVATE)
+    private fun legacy(context: Context): SharedPreferences =
+        context.applicationContext.getSharedPreferences(LEGACY_FILE, Context.MODE_PRIVATE)
 }

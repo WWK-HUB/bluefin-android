@@ -50,7 +50,7 @@ internal object OverlayLauncher {
         }
     }
 
-    fun isShowing(): Boolean = window != null
+    fun isShowing(): Boolean = window?.isAttached() == true
 
     fun addListener(listener: Listener) {
         listeners.add(listener)
@@ -123,6 +123,8 @@ internal object OverlayLauncher {
 
     private fun showWindow(context: Context, toast: Boolean, updateNotification: Boolean): Boolean {
         if (isShowing()) return true
+        window?.close()
+        window = null
         val app = context.applicationContext
         appContext = app
         if (!Settings.canDrawOverlays(app)) return false

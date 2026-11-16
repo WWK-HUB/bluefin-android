@@ -13,8 +13,8 @@ android {
         applicationId = "com.wwkhub.bluefin"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.9.0"
+        versionCode = 25
+        versionName = "0.9.1-rc1"
     }
 
     buildTypes {
@@ -46,6 +46,7 @@ dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 val repoRoot = rootProject.projectDir.parentFile

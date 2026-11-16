@@ -41,6 +41,8 @@ internal object PackRepository {
     @Volatile
     private var bundledCache: List<PackAppearance>? = null
 
+    fun revision(context: Context, id: String): Long = prefs(context).getLong("pack_revision_$id", 0L)
+
     fun packRoot(context: Context): File = File(context.applicationContext.filesDir, DIR)
 
     fun builtInManifest(context: Context): PackManifest {
@@ -200,6 +202,7 @@ internal object PackRepository {
             dir.deleteRecursively()
             throw PackImportException(PackImportFailure.IO, "manifest")
         }
+        prefs(context).edit().putLong("pack_revision_${manifest.id}", revision(context, manifest.id) + 1).apply()
         return PackAppearance(id = manifest.id, manifest = manifest, dir = dir)
     }
 

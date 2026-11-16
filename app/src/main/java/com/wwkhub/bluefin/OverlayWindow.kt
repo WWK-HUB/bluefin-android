@@ -86,7 +86,7 @@ internal class OverlayWindow(
     private val handler = Handler(Looper.getMainLooper())
     private val cuePlayer = CuePlayer()
     private val root: FrameLayout
-    private val web: WebView
+    private var web: WebView
     private val params: WindowManager.LayoutParams
     private val hit = View(themedContext)
     private val hitParams: WindowManager.LayoutParams
@@ -111,6 +111,9 @@ internal class OverlayWindow(
     private var chatSession: ChatSession? = null
     private var chatListener: ((ChatSnapshot) -> Unit)? = null
     private var orbExpanded = false
+    private enum class OrbPage { MAIN, ACTIONS, APPEARANCE, REPLY }
+    private var orbPage = OrbPage.MAIN
+    private var replyReaderListener: ((ChatSnapshot) -> Unit)? = null
     private var attached = false
     private var hitAttached = false
     private var clickThrough = false
@@ -133,9 +136,34 @@ internal class OverlayWindow(
     private var downWinX = 0
     private var downWinY = 0
     private var lastMode = ""
+    private val hitLocation = IntArray(2)
+    private var actionGridPack: PackManifest? = null
+    private var actionGridPackId: String? = null
+    private var captureHidesOverlay = false
+    private val applyPetFrame = Runnable { pushPrefs() }
+    private val petPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            BluefinStore.KEY_SCALE, BluefinStore.KEY_SIZE, BluefinStore.KEY_OPACITY,
+            BluefinStore.KEY_HIDDEN, BluefinStore.KEY_ROAM, BluefinStore.KEY_SOUND -> syncPetSettings()
+            BluefinStore.KEY_ORB_SIZE_DP -> layoutOrb()
+        }
+    }
     private var resting = false
     private var lastInteract = SystemClock.uptimeMillis()
-    private var lastTurnAt = 0L
+    private var appearanceListGeneration = 0
+    private var stageGeneration = 0
+    private var stageUrl = ""
+    private var lastReadyPackId = PackFormat.BUILT_IN_ID
+    private var rendererRestarts = 0
+    private var screenInteractive = true
+    private var screenReceiverRegistered = false
+    private val screenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: android.content.Intent) {
+            screenInteractive = intent.action != android.content.Intent.ACTION_SCREEN_OFF
+            if (screenInteractive) lastInteract = SystemClock.uptimeMillis()
+            updateOverlayVisibility()
+        }
+    }
     private var webDestroyed = false
     private var currentPackId = PackFormat.BUILT_IN_ID
     private var currentManifest: PackManifest? = null
@@ -162,11 +190,10 @@ internal class OverlayWindow(
     // generation and a bounded summary survive.
     private var bubbleChatListener: ((ChatSnapshot) -> Unit)? = null
     private var bubbleSignalToken: Long? = null
-    private var bubbleSignalUserIndex: Int = -1
+    private var bubbleSignalStartIndex: Int = -1
     private var bubbleSignalGeneration: Int = -1
     private var bubblePendingSummary: String = ""
     private var bubblePendingGeneration: Int = -1
-    private var bubblePendingUserIndex: Int = -1
     private var bubbleFirstAttach: BubblePreviewFirstAttachFlow? = null
     private var bubbleFirstAttachToken: Long = 0L
     private var bubbleFirstAttachDeadline: Runnable? = null
@@ -268,12 +295,25 @@ internal class OverlayWindow(
         attached = true
         layoutOrb()
         loadedPackKey = cheapPackKey()
-        web.loadUrl(cheapStageUrl())
+        loadStage(cheapStageUrl())
+        screenInteractive = appContext.getSystemService(android.os.PowerManager::class.java).isInteractive
+        androidx.core.content.ContextCompat.registerReceiver(
+            appContext,
+            screenReceiver,
+            android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_SCREEN_OFF)
+                addAction(android.content.Intent.ACTION_SCREEN_ON)
+            },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        screenReceiverRegistered = true
+        updateOverlayVisibility()
         handler.post { if (attached && !destroyed) syncFromPrefs() }
     }
 
     fun close() {
         if (destroyed) return
+        cancelPetGesture()
         closing = true
         val bubble = bubblePreview
         try {
@@ -292,17 +332,23 @@ internal class OverlayWindow(
         } catch (error: Exception) {
             Log.w(TAG, "optional bubble close contained type=${error.javaClass.name}")
         } finally {
+            detachReplyReader()
+            web.removeCallbacks(applyPetFrame)
+            prefs().unregisterOnSharedPreferenceChangeListener(petPrefsListener)
             ScreenAwareness.onOverlayReply = null
             ScreenAwareness.hideOverlayForCapture = null
             OverlayAppVisibility.removeChatVisibilityListener(chatVisibilityListener)
             if (bubble?.hasUnresolvedCleanup() != true) bubblePreview = null
-            chatSession?.stop()
             chatListener?.let { listener -> chatSession?.removeListener(listener) }
             chatListener = null
             chatSession = null
             val wasAttached = attached
             attached = false
             unregisterDisplayCallbacks()
+            if (screenReceiverRegistered) {
+                appContext.unregisterReceiver(screenReceiver)
+                screenReceiverRegistered = false
+            }
             removeIfAttached(hit, hitAttached)
             hitAttached = false
             removeIfAttached(orbRoot, orbAttached)
@@ -337,6 +383,12 @@ internal class OverlayWindow(
         }
     }
 
+    private fun syncPetSettings() {
+        if (destroyed || !pageReady) return
+        web.removeCallbacks(applyPetFrame)
+        web.postOnAnimation(applyPetFrame)
+    }
+
     /**
      * Click-through only drops or restores the pet hit window. The stage, orb,
      * panel and chat keep their own windows, and nothing is rebuilt here.
@@ -369,7 +421,7 @@ internal class OverlayWindow(
         val id = currentIdFromPrefs()
         currentPackId = id
         val scheme = storedScheme(id)
-        return "$id|$scheme"
+        return "$id|$scheme|${PackRepository.revision(appContext, id)}"
     }
 
     private fun cheapStageUrl(): String {
@@ -402,17 +454,15 @@ internal class OverlayWindow(
         currentManifest = appearance.manifest
         val scheme = if (appearance.id == PackFormat.BUILT_IN_ID) {
             PackRepository.readScheme(appContext, appearance.manifest)
-        } else storedScheme(appearance.id)
-        val key = appearance.id + "|" + scheme
+        } else PackRepository.readScheme(appContext, appearance.manifest)
+        val key = "${appearance.id}|$scheme|${PackRepository.revision(appContext, appearance.id)}"
         if (key == loadedPackKey) return
-        // If the first page is still loading, leave the old key in place so the
-        // page-finished sync notices the switch and loads the selected pack.
-        if (!pageReady) return
+        dropHitWindow()
         loadedPackKey = key
         pageReady = false
         bubbleGeometryGeneration += 1
         bubblePreview?.let { runBubbleHostCallback("page-reset") { it.onHostPageReset() } }
-        web.loadUrl(stageUrlFor(appearance))
+        loadStage(stageUrlFor(appearance))
     }
 
     private fun stageUrlFor(appearance: PackAppearance): String {
@@ -496,25 +546,105 @@ internal class OverlayWindow(
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (destroyed || !attached) return
-                if (!url.contains("index.html") && !url.contains("pack-host.html")) return
-                pageReady = true
+                if (destroyed || !attached || view !== web || url != stageUrl) return
                 injectPage()
-                handler.post { if (attached && !destroyed) syncFromPrefs() }
+                awaitStage(stageGeneration, SystemClock.uptimeMillis() + 15_000L)
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                if (view !== web || destroyed) return true
+                Log.w(TAG, "overlay renderer exited crashed=${detail.didCrash()}")
+                stageGeneration++
+                pageReady = false
+                dropHitWindow()
+                root.removeView(view)
+                view.destroy()
+                webDestroyed = true
+                if (++rendererRestarts <= 3) rebuildStage()
+                else Toast.makeText(appContext, R.string.orb_stage_failed, Toast.LENGTH_LONG).show()
+                return true
             }
         }
+    }
+
+    fun isAttached(): Boolean = attached && root.isAttachedToWindow
+
+    private fun rebuildStage() {
+        if (destroyed || !attached) return
+        web = WebView(themedContext)
+        root.addView(web, FrameLayout.LayoutParams(-1, -1))
+        webDestroyed = false
+        setupWebView()
+        if (rendererRestarts > 1) {
+            PackRepository.setCurrent(appContext, PackFormat.BUILT_IN_ID)
+            currentManifest = PackRepository.builtInManifest(appContext)
+            loadedPackKey = cheapPackKey()
+        }
+        loadStage(cheapStageUrl())
+    }
+
+    private fun loadStage(url: String) {
+        pageReady = false
+        val generation = ++stageGeneration
+        stageUrl = url + (if ('?' in url) "&" else "?") + "load=$generation"
+        if (webDestroyed) {
+            rendererRestarts = 0
+            web = WebView(themedContext)
+            root.addView(web, FrameLayout.LayoutParams(-1, -1))
+            webDestroyed = false
+            setupWebView()
+        }
+        lastInteract = SystemClock.uptimeMillis()
+        resting = false
+        Log.i(TAG, "stage loading generation=$generation pack=$currentPackId")
+        web.loadUrl(stageUrl)
+        handler.postDelayed({
+            if (generation == stageGeneration && !pageReady && !destroyed) failStage()
+        }, 15_000L)
+    }
+
+    private fun awaitStage(generation: Int, deadline: Long) {
+        if (destroyed || webDestroyed || generation != stageGeneration || pageReady) return
+        web.evaluateJavascript(
+            "window.__bluefinLoadFailed ? -1 : (window.__bluefinNative?.ready() ? 1 : 0)"
+        ) { result ->
+            if (destroyed || generation != stageGeneration || pageReady) return@evaluateJavascript
+            when {
+                result == "1" -> {
+                    pageReady = true
+                    lastReadyPackId = currentPackId
+                    Log.i(TAG, "stage ready generation=$generation")
+                    pushPrefs()
+                }
+                result == "-1" || SystemClock.uptimeMillis() >= deadline -> failStage()
+                else -> handler.postDelayed({ awaitStage(generation, deadline) }, 150L)
+            }
+        }
+    }
+
+    private fun failStage() {
+        stageGeneration++
+        pageReady = false
+        dropHitWindow()
+        Log.w(TAG, "stage load failed")
+        Toast.makeText(appContext, R.string.orb_stage_failed, Toast.LENGTH_LONG).show()
+        if (currentPackId == PackFormat.BUILT_IN_ID) return
+        val fallback = if (lastReadyPackId == currentPackId) PackFormat.BUILT_IN_ID else lastReadyPackId
+        PackRepository.setCurrent(appContext, fallback)
+        refreshPackIfNeeded()
+        refreshOrbControls()
     }
 
     private fun injectPage() {
         val bridge = uiContext.assets.open("native/bridge.js").bufferedReader().use { it.readText() }
         val stage = uiContext.assets.open("native/overlay-stage.js").bufferedReader().use { it.readText() }
         web.evaluateJavascript(bridge, null)
-        web.evaluateJavascript(stage, null)
+        web.evaluateJavascript("window.__bluefinStageGeneration=$stageGeneration;" + stage, null)
         pushPrefs()
     }
 
     private fun pushPrefs() {
-        if (destroyed) return
+        if (destroyed || webDestroyed) return
         val roam = prefs().getBoolean(BluefinStore.KEY_ROAM, true) &&
             (currentManifest?.canWalk != false)
         val hidden = prefs().getBoolean(BluefinStore.KEY_HIDDEN, false)
@@ -532,23 +662,14 @@ internal class OverlayWindow(
         }
         val scaleJs = String.format(Locale.US, "%.2f", scale)
         val opacityJs = OverlayLayout.characterOpacity(requestedOpacity, params.alpha).toString()
+        if (hidden || opacity <= 0f) dropHitWindow()
+        val monitor = !hidden && opacity > 0f && root.visibility == View.VISIBLE
         web.evaluateJavascript(
-            "window.__bluefinNative&&window.__bluefinNative.applyPrefs($roam,$scaleJs,$hidden,$opacityJs)",
+            "window.__bluefinNative?.applyPrefs($roam,$scaleJs,$hidden,$opacityJs);" +
+                "window.__bluefinApplySound?.(${soundOn()});" +
+                "window.__bluefinOverlay?.setMonitoring($monitor);window.qa?.setVisible?.($monitor);",
             null,
         )
-        web.evaluateJavascript(
-            "window.__bluefinApplySound&&window.__bluefinApplySound(${soundOn()})",
-            null,
-        )
-        web.evaluateJavascript(
-            "window.__bluefinOverlay&&window.__bluefinOverlay.setScale($scaleJs)",
-            null,
-        )
-        web.evaluateJavascript(
-            "window.__bluefinOverlay&&window.__bluefinOverlay.setOpacity($opacityJs)",
-            null,
-        )
-        refreshOrbControls()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -566,26 +687,26 @@ internal class OverlayWindow(
                     downRawY = event.rawY
                     downWinX = hitParams.x
                     downWinY = hitParams.y
-                    sendPointer("down", cssX, cssY)
+                    sendPointer("down", cssX, cssY, event.eventTime)
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
                     if (tracking) moveHitWithFinger(event.rawX, event.rawY)
-                    sendPointer("move", cssX, cssY)
+                    sendPointer("move", cssX, cssY, event.eventTime)
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
                     tracking = false
                     lastInteract = SystemClock.uptimeMillis()
-                    sendPointer("up", cssX, cssY)
+                    sendPointer("up", cssX, cssY, event.eventTime)
                     true
                 }
 
                 MotionEvent.ACTION_CANCEL -> {
                     tracking = false
-                    sendPointer("cancel", cssX, cssY)
+                    sendPointer("cancel", cssX, cssY, event.eventTime)
                     true
                 }
 
@@ -682,6 +803,7 @@ internal class OverlayWindow(
     }
 
     private fun addOrbPanelListeners() {
+        prefs().registerOnSharedPreferenceChangeListener(petPrefsListener)
         bindScreenAwareness()
         orbPanel.findViewById<View>(R.id.overlay_open_chat).setOnClickListener {
             openSpeechEntry()
@@ -695,8 +817,20 @@ internal class OverlayWindow(
             appContext.startActivity(ScreenAwarenessActivity.settingsIntent(appContext, overlay = true))
         }
         orbPanel.findViewById<View>(R.id.overlay_change_character).setOnClickListener {
-            collapseOrb()
-            ChatEntry.openCharacterSettings(appContext)
+            openAppearanceList()
+        }
+        orbPanel.findViewById<View>(R.id.overlay_open_actions).setOnClickListener {
+            refreshActionButtons()
+            showOrbPage(OrbPage.ACTIONS)
+        }
+        orbPanel.findViewById<View>(R.id.overlay_orb_detail_back).setOnClickListener { closeOrbDetail() }
+        orbRoot.isFocusableInTouchMode = true
+        orbRoot.setOnKeyListener { _, keyCode, event ->
+            if (keyCode != android.view.KeyEvent.KEYCODE_BACK || orbPage == OrbPage.MAIN) {
+                return@setOnKeyListener false
+            }
+            if (event.action == android.view.KeyEvent.ACTION_UP && !event.isCanceled) closeOrbDetail()
+            true
         }
 
         val sizeSlider = orbPanel.findViewById<SeekBar>(R.id.overlay_size_slider)
@@ -708,7 +842,6 @@ internal class OverlayWindow(
                 val scale = BluefinStore.progressToScale(progress)
                 sizeValue.text = String.format(Locale.US, "%.2f", scale)
                 BluefinStore.writeScale(prefs(), scale)
-                pushPrefs()
             }
 
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -716,13 +849,14 @@ internal class OverlayWindow(
         })
 
         val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
+        val opacityValue = orbPanel.findViewById<TextView>(R.id.overlay_opacity_value)
         opacitySlider.max = 100
         opacitySlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (orbSyncing) return
                 val opacity = BluefinStore.progressToOpacity(progress)
+                opacityValue.text = opacityLabel(opacity)
                 BluefinStore.writeOpacity(prefs(), opacity)
-                pushPrefs()
             }
 
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -738,8 +872,6 @@ internal class OverlayWindow(
                 val sizeDp = BluefinStore.progressToOrbSize(progress)
                 orbSizeValue.text = "${sizeDp.roundToInt()}dp"
                 BluefinStore.writeOrbSizeDp(prefs(), sizeDp)
-                // Orb size only affects the orb button/window, never the pet.
-                layoutOrb()
             }
 
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
@@ -756,14 +888,12 @@ internal class OverlayWindow(
                 return@setOnCheckedChangeListener
             }
             prefs().edit().putBoolean(BluefinStore.KEY_ROAM, checked).apply()
-            pushPrefs()
         }
         orbPanel.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(
             R.id.overlay_sound_switch,
         ).setOnCheckedChangeListener { _, checked ->
             if (orbSyncing) return@setOnCheckedChangeListener
             prefs().edit().putBoolean(BluefinStore.KEY_SOUND, checked).apply()
-            pushPrefs()
         }
         orbPanel.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(
             R.id.overlay_click_through_switch,
@@ -780,6 +910,17 @@ internal class OverlayWindow(
             collapseOrb()
             handler.post { onReturnToAppRequested() }
         }
+        orbPanel.findViewById<android.widget.CompoundButton>(R.id.overlay_auto_rest).apply {
+            isChecked = prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true)
+            setOnCheckedChangeListener { _, enabled ->
+                prefs().edit().putBoolean(BluefinStore.KEY_AUTO_REST, enabled).apply()
+                lastInteract = SystemClock.uptimeMillis()
+                if (!enabled && resting && pageReady) {
+                    resting = false
+                    web.evaluateJavascript("window.__bluefinOverlay?.act('stand')", null)
+                }
+            }
+        }
         chatSettings.setOnClickListener { openModelSettingsFromOverlay() }
         chatCollapse.setOnClickListener { collapseOrb() }
         orbPanel.findViewById<View>(R.id.overlay_open_records).setOnClickListener {
@@ -793,6 +934,161 @@ internal class OverlayWindow(
         }
     }
 
+    private fun showOrbPage(page: OrbPage) {
+        orbPage = page
+        orbPanel.findViewById<View>(R.id.overlay_orb_main).visibility =
+            if (page == OrbPage.MAIN) View.VISIBLE else View.GONE
+        val detail = orbPanel.findViewById<View>(R.id.overlay_orb_detail)
+        detail.visibility = if (page == OrbPage.MAIN) View.GONE else View.VISIBLE
+        detail.findViewById<View>(R.id.overlay_actions_grid).visibility =
+            if (page == OrbPage.ACTIONS) View.VISIBLE else View.GONE
+        detail.findViewById<View>(R.id.overlay_appearance_list).visibility =
+            if (page == OrbPage.APPEARANCE) View.VISIBLE else View.GONE
+        detail.findViewById<View>(R.id.overlay_reply_text).visibility =
+            if (page == OrbPage.REPLY) View.VISIBLE else View.GONE
+        detail.findViewById<View>(R.id.overlay_reply_stop).visibility = View.GONE
+        val title = when (page) {
+            OrbPage.MAIN -> null
+            OrbPage.ACTIONS -> R.string.orb_actions
+            OrbPage.APPEARANCE -> R.string.orb_appearance_switch
+            OrbPage.REPLY -> R.string.orb_reply_full
+        }
+        title?.let { detail.findViewById<TextView>(R.id.overlay_orb_detail_title).setText(it) }
+        (orbPanel as android.widget.ScrollView).scrollTo(0, 0)
+        if (orbExpanded && !chatExpanded) {
+            setOrbFocusable(page != OrbPage.MAIN)
+            if (page != OrbPage.MAIN) orbRoot.requestFocus()
+            layoutOrb()
+        }
+    }
+
+    private fun closeOrbDetail() {
+        if (orbPage == OrbPage.REPLY) collapseOrb()
+        else showOrbPage(OrbPage.MAIN)
+    }
+
+    private fun openAppearanceList() {
+        val generation = ++appearanceListGeneration
+        Log.i(TAG, "appearance opened build=${BuildConfig.VERSION_CODE} sdk=${Build.VERSION.SDK_INT} webview=${androidx.webkit.WebViewCompat.getCurrentWebViewPackage(appContext)?.versionName}")
+        val list = orbPanel.findViewById<android.widget.LinearLayout>(R.id.overlay_appearance_list)
+        fun showFailure(error: Exception) {
+            Log.w(TAG, "appearance load failed type=${error.javaClass.simpleName}")
+            list.removeAllViews()
+            list.addView(android.widget.Button(themedContext).apply {
+                setText(R.string.orb_appearance_retry)
+                setOnClickListener { openAppearanceList() }
+            })
+        }
+        try {
+            list.removeAllViews()
+            list.addView(TextView(themedContext).apply { setText(R.string.loading) })
+            showOrbPage(OrbPage.APPEARANCE)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "appearance page failed type=${error.javaClass.simpleName}")
+            Toast.makeText(appContext, R.string.orb_appearance_retry, Toast.LENGTH_SHORT).show()
+            return
+        }
+        kotlin.concurrent.thread(name = "bluefin-appearance-list") {
+            val result = runCatching { PackRepository.listBuiltIn(appContext) + PackRepository.listImported(appContext) }
+            handler.post {
+                if (destroyed || generation != appearanceListGeneration || orbPage != OrbPage.APPEARANCE) return@post
+                try {
+                    showAppearanceChoices(result.getOrThrow())
+                    layoutOrb()
+                } catch (error: Exception) {
+                    showFailure(error)
+                }
+            }
+        }
+    }
+
+    private fun showAppearanceChoices(appearances: List<PackAppearance>) {
+        val list = orbPanel.findViewById<android.widget.LinearLayout>(R.id.overlay_appearance_list)
+        list.removeAllViews()
+        val selected = PackRepository.currentId(appContext)
+        for (appearance in appearances) {
+            val current = appearance.id == selected
+            list.addView(appearanceRow(
+                if (current) uiContext.getString(R.string.orb_appearance_selected, appearance.displayName)
+                else appearance.displayName,
+            ) {
+                if (!current) {
+                    try {
+                        PackRepository.setCurrent(appContext, appearance.id)
+                        syncFromPrefs()
+                    } catch (error: RuntimeException) {
+                        Log.w(TAG, "appearance selection failed type=${error.javaClass.simpleName}")
+                        Toast.makeText(appContext, R.string.orb_stage_failed, Toast.LENGTH_SHORT).show()
+                        return@appearanceRow
+                    }
+                } else if (!pageReady) {
+                    loadStage(cheapStageUrl())
+                }
+                showOrbPage(OrbPage.MAIN)
+            })
+        }
+        list.addView(appearanceRow(getString(R.string.orb_appearance_manage)) {
+            collapseOrb()
+            ChatEntry.openCharacterSettings(appContext)
+        })
+    }
+
+    private fun appearanceRow(label: String, onClick: () -> Unit) =
+        com.google.android.material.button.MaterialButton(
+            themedContext, null, com.google.android.material.R.attr.materialButtonOutlinedStyle,
+        ).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            text = label
+            isAllCaps = false
+            minHeight = dp(48)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setOnClickListener { onClick() }
+        }
+
+    private fun openReplyReader() {
+        val session = chatSession ?: return
+        val generation = bubbleSignalGeneration
+        val initial = session.snapshot()
+        if (initial.requestGeneration != generation || initial.responseStartIndex == null) return
+        dismissBubblePreview()
+        collapseOrb()
+        orbExpanded = true
+        showOrbPage(OrbPage.REPLY)
+        val scroll = orbPanel as android.widget.ScrollView
+        val body = scroll.findViewById<TextView>(R.id.overlay_reply_text)
+        val stop = scroll.findViewById<View>(R.id.overlay_reply_stop)
+        stop.setOnClickListener { session.stop() }
+        var first = true
+        val listener: (ChatSnapshot) -> Unit = listener@{ snapshot ->
+            if (orbPage != OrbPage.REPLY || snapshot.requestGeneration != generation) return@listener
+            val following = !first && !scroll.canScrollVertically(1)
+            val text = snapshot.lines.getOrNull(initial.responseStartIndex)?.text.orEmpty()
+            val active = snapshot.phase == ChatPhase.THINKING || snapshot.phase == ChatPhase.STREAMING
+            val display = text.ifEmpty {
+                snapshot.lastError ?: getString(if (active) R.string.chat_thinking else R.string.chat_stopped)
+            }
+            if (body.text.toString() != display) {
+                body.text = display
+                if (following) scroll.post {
+                    if (orbPage == OrbPage.REPLY && replyReaderListener != null) {
+                        scroll.scrollTo(0, scroll.getChildAt(0).height)
+                    }
+                }
+            }
+            stop.visibility = if (active) View.VISIBLE else View.GONE
+            first = false
+        }
+        replyReaderListener = listener
+        session.addListener(listener)
+    }
+
+    private fun detachReplyReader() {
+        replyReaderListener?.let { chatSession?.removeListener(it) }
+        replyReaderListener = null
+    }
+
     private fun bindScreenAwareness() {
         ScreenAwareness.onOverlayReply = { prompt, snapshot ->
             if (bubbleRestoreAllowed()) {
@@ -800,17 +1096,15 @@ internal class OverlayWindow(
                 scheduleBubblePreviewAfterStarted(
                     userSummary = bubbleSummary(prompt),
                     acceptedGeneration = snapshot.requestGeneration,
-                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
+                    responseStartIndex = snapshot.responseStartIndex ?: -1,
                 )
                 true
             } else false
         }
         ScreenAwareness.hideOverlayForCapture = { hide ->
-            val visibility = if (hide) View.INVISIBLE else View.VISIBLE
-            root.visibility = visibility
-            orbRoot.visibility = visibility
-            hit.visibility = visibility
+            captureHidesOverlay = hide
             if (hide) dismissBubblePreview()
+            updateOverlayVisibility()
         }
     }
 
@@ -829,12 +1123,7 @@ internal class OverlayWindow(
             val opacitySlider = orbPanel.findViewById<SeekBar>(R.id.overlay_opacity_slider)
             opacitySlider.max = 100
             opacitySlider.progress = BluefinStore.opacityToProgress(opacity)
-            val effective = OverlayLayout.effectivePetOpacity(opacity, params.alpha)
-            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text = if (effective < opacity) {
-                uiContext.getString(R.string.overlay_opacity_limited, (effective * 100).roundToInt())
-            } else {
-                "${(effective * 100).roundToInt()}%"
-            }
+            orbPanel.findViewById<TextView>(R.id.overlay_opacity_value).text = opacityLabel(opacity)
             val orbSizeSlider = orbPanel.findViewById<SeekBar>(R.id.overlay_orb_size_slider)
             orbSizeSlider.max = 28
             orbSizeSlider.progress = BluefinStore.orbSizeToProgress(orbSizeDp)
@@ -869,7 +1158,17 @@ internal class OverlayWindow(
         }
     }
 
+    private fun opacityLabel(requested: Float): String {
+        val effective = OverlayLayout.effectivePetOpacity(requested, params.alpha)
+        val percent = (effective * 100).roundToInt()
+        return if (effective < requested) uiContext.getString(R.string.overlay_opacity_limited, percent)
+        else "$percent%"
+    }
+
     private fun refreshActionButtons() {
+        if (actionGridPackId == currentPackId && actionGridPack == currentManifest) return
+        actionGridPackId = currentPackId
+        actionGridPack = currentManifest
         val grid = orbPanel.findViewById<GridLayout>(R.id.overlay_actions_grid)
         grid.removeAllViews()
         val appearanceBuiltIn = currentPackId == PackFormat.BUILT_IN_ID
@@ -905,8 +1204,7 @@ internal class OverlayWindow(
                 isAllCaps = false
                 minWidth = 0
                 minHeight = dp(48)
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
+                maxLines = 2
                 setTextColor(themedContext.getColor(R.color.blue_deep))
                 setPadding(dp(2), 0, dp(2), 0)
                 setOnClickListener {
@@ -939,7 +1237,7 @@ internal class OverlayWindow(
         hideOrbUnconfiguredPrompt()
         orbExpanded = true
         chatExpanded = false
-        layoutOrb()
+        showOrbPage(OrbPage.MAIN)
         orbPanel.pivotX = if (orbSideRight) orbPanel.layoutParams.width.toFloat() else 0f
         orbPanel.pivotY = 0f
         BluefinMotion.enter(orbPanel, x = dp(if (orbSideRight) 16 else -16).toFloat(), scale = 0.985f)
@@ -950,6 +1248,8 @@ internal class OverlayWindow(
         if (!orbExpanded && !chatExpanded) return
         orbExpanded = false
         chatExpanded = false
+        detachReplyReader()
+        if (orbPage != OrbPage.MAIN) showOrbPage(OrbPage.MAIN)
         detachChatListener()
         orbPanel.animate().cancel()
         chatPanel.animate().cancel()
@@ -1221,7 +1521,7 @@ internal class OverlayWindow(
                 val replyToken = ++bubbleRequestToken
                 bubbleSignalToken = replyToken
                 bubbleSignalGeneration = snapshot.requestGeneration
-                bubbleSignalUserIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER }
+                bubbleSignalStartIndex = snapshot.responseStartIndex ?: -1
                 bubbleInputToken = 0L
                 bubbleInputPending = false
                 bubbleAwaitingAttachToken = null
@@ -1338,7 +1638,7 @@ internal class OverlayWindow(
                 scheduleBubblePreviewAfterStarted(
                     userSummary = bubbleSummary(text),
                     acceptedGeneration = snapshot.requestGeneration,
-                    userIndex = snapshot.lines.indexOfLast { it.role == ChatRole.USER },
+                    responseStartIndex = snapshot.responseStartIndex ?: -1,
                 )
             }
             ChatDraftSendOutcome.NOT_CONFIGURED -> {
@@ -1514,13 +1814,22 @@ internal class OverlayWindow(
             // In landscape the panel uses the short side minus small insets; it
             // must not inherit the portrait roam-band clearance or only actions
             // would fit. The panel is a scrollable side column beside the orb.
-            val panelWidth = OverlayLayout.orbPanelWidthPx(sw, d, orbSizeDp)
-            val panelHeight = OverlayLayout.orbPanelHeightPx(sh, d, landscape)
+            val reservedOrbSizeDp = BluefinStore.ORB_SIZE_MAX_DP
+            val reservedOrbSize = (reservedOrbSizeDp * d).roundToInt()
+            val panelWidth = OverlayLayout.orbPanelWidthPx(sw, d, reservedOrbSizeDp)
+            val maxPanelHeight = OverlayLayout.orbPanelHeightPx(sh, d, landscape)
+            val panelHeight = if (!chatExpanded && (orbPage == OrbPage.ACTIONS || orbPage == OrbPage.APPEARANCE)) {
+                orbPanel.measure(
+                    View.MeasureSpec.makeMeasureSpec(panelWidth, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(maxPanelHeight, View.MeasureSpec.AT_MOST),
+                )
+                orbPanel.measuredHeight.coerceIn(1, maxPanelHeight)
+            } else maxPanelHeight
             val panelTop = OverlayLayout.orbPanelTopPx(sh, d, landscape, panelHeight, orbYDp)
             val panelX = if (orbSideRight) {
-                (orbX - panelWidth).coerceAtLeast(0)
+                (sw - margin - reservedOrbSize - panelWidth).coerceAtLeast(0)
             } else {
-                (orbX + orbSize).coerceAtMost((sw - panelWidth).coerceAtLeast(0))
+                (orbX + reservedOrbSize).coerceAtMost((sw - panelWidth).coerceAtLeast(0))
             }
             val panel = if (chatExpanded) chatPanel else orbPanel
             panel.layoutParams = FrameLayout.LayoutParams(panelWidth, panelHeight).apply {
@@ -1569,18 +1878,19 @@ internal class OverlayWindow(
     }
 
     private fun onLayout(json: String) {
-        if (destroyed || !attached) return
+        if (destroyed || !attached || !pageReady || root.visibility != View.VISIBLE ||
+            petHiddenForBubble || petOpacityForBubble <= 0f
+        ) return
         val parsed = try {
             JSONObject(json)
         } catch (error: RuntimeException) {
             Log.w(TAG, "bad layout", error)
             return
         }
+        if (parsed.optInt("generation", -1) != stageGeneration) return
         val mode = parsed.optString("mode")
         val facing = parsed.optInt("facing", 1)
         val x = parsed.optDouble("x").toFloat()
-        val minX = parsed.optDouble("minX").toFloat()
-        val maxX = parsed.optDouble("maxX").toFloat()
         if (mode != lastMode) {
             Log.i(TAG, "mode $lastMode -> $mode x=$x facing=$facing")
             if (resting && (mode == "idle" || mode == "walk" || mode == "run")) resting = false
@@ -1590,17 +1900,10 @@ internal class OverlayWindow(
         // dragging, non-empty geometry stays under moveHitWithFinger's control.
         if (!tracking || (parsed.optJSONArray("hits")?.length() ?: 0) == 0) placeHit(parsed)
         val now = SystemClock.uptimeMillis()
-        val target = OverlayPetPolicy.edgeTarget(x, facing, minX, maxX, mode)
-        if (target != null && !resting && now - lastTurnAt > 450) {
-            lastTurnAt = now
-            val run = mode == "run"
-            Log.i(TAG, "edge turn x=$x -> $target")
-            web.evaluateJavascript(
-                "window.__bluefinOverlay&&window.__bluefinOverlay.walkTo($target, $run)",
-                null,
-            )
-        }
-        if (OverlayPetPolicy.shouldStartSleep(now - lastInteract, mode, resting)) {
+        if (!tracking && !parsed.optBoolean("moving") &&
+            prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true) &&
+            OverlayPetPolicy.shouldStartSleep(now - lastInteract, mode, resting)
+        ) {
             resting = true
             Log.i(TAG, "idle rest")
             web.evaluateJavascript("window.__bluefinOverlay&&window.__bluefinOverlay.rest()", null)
@@ -1637,7 +1940,10 @@ internal class OverlayWindow(
     }
 
     private fun placeHit(parsed: JSONObject) {
-        if (OverlayAppVisibility.chatVisible) return
+        if (root.visibility != View.VISIBLE || petHiddenForBubble || petOpacityForBubble <= 0f) {
+            dropHitWindow()
+            return
+        }
         val hits = parsed.optJSONArray("hits")
         val hasHits = hits != null && hits.length() > 0
         if (!OverlayClickThroughPolicy.shouldAttachHit(clickThrough, hasHits)) {
@@ -1653,10 +1959,11 @@ internal class OverlayWindow(
         var maxX = Float.NEGATIVE_INFINITY
         var maxY = Float.NEGATIVE_INFINITY
         for (i in 0 until hitList.length()) {
-            val hit = hitList.getJSONObject(i)
+            val hit = hitList.optJSONObject(i) ?: return
             val hx = hit.optDouble("x").toFloat()
             val hy = hit.optDouble("y").toFloat()
             val r = hit.optDouble("r").toFloat()
+            if (!hx.isFinite() || !hy.isFinite() || !r.isFinite() || r <= 0f) return
             minX = minOf(minX, hx - r)
             minY = minOf(minY, hy - r)
             maxX = maxOf(maxX, hx + r)
@@ -1664,7 +1971,7 @@ internal class OverlayWindow(
         }
         val d = density()
         val pad = 12f * d
-        val loc = IntArray(2)
+        val loc = hitLocation
         web.getLocationOnScreen(loc)
         val left = (loc[0] + minX * d - pad).roundToInt()
         val top = (loc[1] + minY * d - pad).roundToInt()
@@ -1674,14 +1981,20 @@ internal class OverlayWindow(
         val width = (right - left).coerceAtLeast(dp(48))
         val height = (bottom - top).coerceAtLeast(dp(48))
         val (x, y) = OverlayLayout.clamp(left, top, width, height, sw, sh)
+        val windowWidth = width.coerceAtMost(sw)
+        val windowHeight = height.coerceAtMost(sh)
+        if (hitAttached && hitParams.x == x && hitParams.y == y &&
+            hitParams.width == windowWidth && hitParams.height == windowHeight
+        ) return
         hitParams.x = x
         hitParams.y = y
         bubbleHitBaseLeft = x
         bubbleHitBaseTop = y
-        hitParams.width = width.coerceAtMost(sw)
-        hitParams.height = height.coerceAtMost(sh)
+        hitParams.width = windowWidth
+        hitParams.height = windowHeight
         if (!hitAttached) {
             try {
+                hit.visibility = View.VISIBLE
                 windowManager.addView(hit, hitParams)
                 hitAttached = true
                 bringOrbToFront()
@@ -1698,7 +2011,7 @@ internal class OverlayWindow(
     }
 
     private fun dropHitWindow() {
-        tracking = false
+        cancelPetGesture()
         if (!hitAttached) return
         try {
             windowManager.removeViewImmediate(hit)
@@ -1711,13 +2024,24 @@ internal class OverlayWindow(
 
     private fun updateChatVisibility(chatVisible: Boolean) {
         if (destroyed) return
-        if (chatVisible) {
-            collapseOrb()
-            dropHitWindow()
-        }
-        val visibility = if (chatVisible) View.INVISIBLE else View.VISIBLE
+        if (chatVisible) collapseOrb()
+        updateOverlayVisibility()
+    }
+
+    private fun updateOverlayVisibility() {
+        val visibility = if (OverlayAppVisibility.chatVisible || captureHidesOverlay || !screenInteractive) View.INVISIBLE else View.VISIBLE
         root.visibility = visibility
         orbRoot.visibility = visibility
+        if (visibility != View.VISIBLE || clickThrough || petHiddenForBubble || petOpacityForBubble <= 0f) {
+            dropHitWindow()
+        }
+        updateStageMonitoring()
+    }
+
+    private fun updateStageMonitoring() {
+        if (!attached || !pageReady) return
+        val visible = root.visibility == View.VISIBLE && !petHiddenForBubble && petOpacityForBubble > 0f
+        web.evaluateJavascript("window.__bluefinOverlay?.setMonitoring($visible);window.qa?.setVisible?.($visible);", null)
     }
 
     private fun moveHitWithFinger(rawX: Float, rawY: Float) {
@@ -1735,10 +2059,16 @@ internal class OverlayWindow(
         }
     }
 
-    private fun sendPointer(type: String, x: Float, y: Float) {
+    private fun cancelPetGesture() {
+        if (!tracking) return
+        tracking = false
+        sendPointer("cancel", 0f, 0f, SystemClock.uptimeMillis())
+    }
+
+    private fun sendPointer(type: String, x: Float, y: Float, time: Long) {
         if (!pageReady) return
         web.evaluateJavascript(
-            "window.__bluefinOverlay&&window.__bluefinOverlay.pointer(${JSONObject.quote(type)},$x,$y)",
+            "window.__bluefinOverlay&&window.__bluefinOverlay.pointer(${JSONObject.quote(type)},$x,$y,$time)",
             null,
         )
     }
@@ -1803,12 +2133,11 @@ internal class OverlayWindow(
     private fun scheduleBubblePreviewAfterStarted(
         userSummary: String,
         acceptedGeneration: Int,
-        userIndex: Int,
+        responseStartIndex: Int,
     ) {
         val requestToken = ++bubbleRequestToken
         bubblePendingSummary = userSummary
         bubblePendingGeneration = acceptedGeneration
-        bubblePendingUserIndex = userIndex
         handler.post {
             if (requestToken != bubbleRequestToken) return@post
             try {
@@ -1855,7 +2184,7 @@ internal class OverlayWindow(
                 }
                 bubbleSignalToken = requestToken
                 bubbleSignalGeneration = acceptedGeneration
-                bubbleSignalUserIndex = userIndex
+                bubbleSignalStartIndex = responseStartIndex
                 installBubbleInsetsCallbacks()
                 installPanelInsetsHandler()
                 installBubbleAppVisibility()
@@ -1916,7 +2245,7 @@ internal class OverlayWindow(
 
             override fun onBubbleFullChatRequested() {
                 postBubbleCallback("full-chat", bubbleSignalToken) {
-                    if (!destroyed && attached) openFullChat()
+                    if (!destroyed && attached) openReplyReader()
                 }
             }
 
@@ -2265,11 +2594,11 @@ internal class OverlayWindow(
     }
 
     private fun bubbleSignalPayload(snapshot: ChatSnapshot): BubbleSignalPayload {
-        val userIndex = bubbleSignalUserIndex
-        val indexValid = snapshot.lines.getOrNull(userIndex)?.role == ChatRole.USER
+        val startIndex = bubbleSignalStartIndex
+        val indexValid = startIndex == snapshot.responseStartIndex && startIndex in 0..snapshot.lines.size
         val assistant = if (indexValid) {
             snapshot.lines
-                .drop((userIndex + 1).coerceAtLeast(0))
+                .drop(startIndex)
                 .lastOrNull { line -> line.role == ChatRole.ASSISTANT }
                 ?.text
                 .orEmpty()
@@ -2988,6 +3317,7 @@ internal class OverlayWindow(
 
     private fun relayout() {
         if (!attached || destroyed) return
+        cancelPetGesture()
         bubbleGeometryGeneration += 1
         invalidateBubbleDisplayBasis()
         bubblePreview?.let { runBubbleHostCallback("relayout") { it.onHostConfigurationChanged() } }
@@ -2999,7 +3329,7 @@ internal class OverlayWindow(
         }
         layoutOrb()
         if (chatExpanded) refreshChatPanelBaseline()
-        if (pageReady) web.evaluateJavascript("window.dispatchEvent(new Event('resize'))", null)
+        if (pageReady && !webDestroyed) web.evaluateJavascript("window.dispatchEvent(new Event('resize'))", null)
     }
 
     private fun removeIfAttached(view: View, isAttached: Boolean) {
