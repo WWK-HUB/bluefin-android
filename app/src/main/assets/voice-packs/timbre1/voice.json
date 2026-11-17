@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "timbre1",
+  "name": "音色1",
+  "kind": "zipvoice",
+  "reference": "reference.wav",
+  "referenceText": "我才没有一直等你呢，只是刚好看了一眼时间而已",
+  "sampleRate": 24000,
+  "speed": 1.0,
+  "numSteps": 4,
+  "about": "偏低的中位基频（约 149 Hz），语气更收着。"
+}

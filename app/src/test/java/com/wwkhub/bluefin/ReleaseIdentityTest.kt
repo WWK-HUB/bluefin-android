@@ -24,8 +24,8 @@ class ReleaseIdentityTest {
     @Test
     fun versionAndPackageMatchTheRelease() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionName = \"0.9.1-rc1\""))
-        assertTrue(gradle.contains("versionCode = 25"))
+        assertTrue(gradle.contains("versionName = \"0.11.0-rc1\""))
+        assertTrue(gradle.contains("versionCode = 32"))
         assertFalse(gradle.contains("0.6.0-rc3"))
         assertFalse(gradle.contains("versionCode = 21"))
         assertTrue(gradle.contains("applicationId = \"com.wwkhub.bluefin\""))
@@ -50,6 +50,8 @@ class ReleaseIdentityTest {
         assertTrue(strings.contains("API Key"))
         assertTrue(strings.contains("角色外观包"))
         assertFalse(strings.contains("不含多角色"))
-        assertTrue(strings.contains("不含语音、电脑控制、内置官方密钥"))
+        assertTrue(strings.contains("不含电脑控制、内置官方密钥"))
+        assertTrue(strings.contains("朗读回复同样在本机离线合成"))
+        assertTrue(strings.contains("语音输入在本机离线识别"))
     }
 }

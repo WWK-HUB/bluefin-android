@@ -31,6 +31,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDialog
 import androidx.core.view.ViewCompat
@@ -42,7 +43,14 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.wwkhub.bluefin.databinding.ActivityMainBinding
+import com.wwkhub.bluefin.update.UpdateCoordinator
+import com.wwkhub.bluefin.update.UpdateInstaller
+import com.wwkhub.bluefin.update.UpdateManifest
+import com.wwkhub.bluefin.voice.tts.OfflineTtsSpec
+import com.wwkhub.bluefin.voice.tts.TtsModelManager
+import com.wwkhub.bluefin.voice.tts.TtsReader
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.util.Locale
 import kotlin.concurrent.thread
@@ -74,12 +82,25 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private var petOpacity = BluefinStore.OPACITY_DEFAULT
     private var petOrbSizeDp = BluefinStore.ORB_SIZE_DEFAULT_DP
     private var pendingOverlayGuide = false
+    private var settingsDialog: BottomSheetDialog? = null
+    private var updateCoordinator: UpdateCoordinator? = null
+    private var updateDialog: AlertDialog? = null
+    private var updateRetry: (() -> Unit)? = null
+    private var pendingInstallFile: File? = null
+    private val updateSourcePermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (pendingInstallFile != null) {
+            if (UpdateInstaller.canRequestInstalls(this)) continueUpdateInstall()
+            else clearPendingUpdate()
+        }
+    }
     private var tipsDialog: AppCompatDialog? = null
     private var tipsView: View? = null
     private var currentAppearanceId = PackFormat.BUILT_IN_ID
     private var currentManifest: PackManifest? = null
     private var pendingImport: PackAnalysis? = null
     private var openCharacterSection: CharacterSection? = null
+    private var speechSectionView: SpeechSettingsSection? = null
+    private var voicePackImportCallback: (() -> Unit)? = null
     private var lastLoadedEntryKey: String? = null
     private var loadingEntry = false
 
@@ -89,6 +110,10 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     private val packFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) beginPackImport(uri, folder = true)
+    }
+
+    private val voicePackPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) beginVoicePackImport(uri)
     }
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -117,6 +142,9 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             KEY_SOUND -> {
                 soundOn = prefs().getBoolean(KEY_SOUND, true)
                 applySound()
+            }
+            BluefinStore.KEY_SPEECH_ON, BluefinStore.KEY_VOICE_PACK_ID -> {
+                TtsReader.peek()?.stop()
             }
             KEY_CHARACTER_ID -> {
                 refreshCharacter()
@@ -181,6 +209,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     override fun onResume() {
         super.onResume()
         OverlayAppVisibility.setForeground(true)
+        OverlayLauncher.setSettingsVisible(settingsDialog?.isShowing == true)
         refreshFromPrefs()
         if (currentAppearanceId != PackRepository.currentId(this)) {
             loadEntry()
@@ -204,16 +233,22 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     override fun onPause() {
         OverlayAppVisibility.setForeground(false)
+        OverlayLauncher.setSettingsVisible(false)
         if (::binding.isInitialized) previewWeb.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        dismissUpdateDialog()
+        updateCoordinator?.cancel()
+        clearPendingUpdate()
         previewWeb.removeCallbacks(applyPetFrame)
         pollGeneration++
         pendingImport?.cleanup()
         pendingImport = null
         openCharacterSection = null
+        speechSectionView = null
+        voicePackImportCallback = null
         dismissTips()
         prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         cuePlayer.release()
@@ -450,6 +485,155 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             }
             openCharacterSection?.refresh()
         }
+    }
+
+    /**
+     * One-time语音引擎 download. The size is spelled out before anything is
+     * fetched, and the engine never ships inside the APK.
+     */
+    fun promptSpeechEngineDownload(onReady: () -> Unit = {}) {
+        if (isFinishing || isDestroyed) return
+        if (TtsModelManager.isInstalled(this)) {
+            onReady()
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.speech_engine_download)
+            .setMessage(
+                getString(R.string.speech_engine_need_engine, OfflineTtsSpec.DOWNLOAD_SIZE_HINT_MB),
+            )
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.speech_engine_download) { _, _ ->
+                runSpeechEngineDownload(onReady)
+            }
+            .show()
+    }
+
+    private fun runSpeechEngineDownload(onReady: () -> Unit) {
+        val bar = android.widget.ProgressBar(
+            this,
+            null,
+            android.R.attr.progressBarStyleHorizontal,
+        ).apply {
+            max = 100
+            isIndeterminate = true
+        }
+        val label = TextView(this).apply {
+            text = getString(R.string.speech_engine_downloading, 0)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.ink))
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+            addView(bar, android.widget.LinearLayout.LayoutParams(-1, dp(8)))
+            addView(
+                label,
+                android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) },
+            )
+        }
+        var cancelledByUser = false
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.speech_engine_download)
+            .setView(box)
+            .setCancelable(false)
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                cancelledByUser = true
+                TtsModelManager.cancel()
+            }
+            .show()
+        TtsModelManager.install(
+            this,
+            onProgress = { percent ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    bar.isIndeterminate = false
+                    bar.progress = percent
+                    label.text = getString(R.string.speech_engine_downloading, percent)
+                }
+            },
+            onDone = { error ->
+                runOnUiThread {
+                    dialog.dismiss()
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (error == null) {
+                        onReady()
+                        speechSectionView?.refresh()
+                    } else if (!cancelledByUser) {
+                        Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+        )
+    }
+
+    fun promptVoicePackImport(onDone: () -> Unit = {}) {
+        if (isFinishing || isDestroyed) return
+        voicePackImportCallback = onDone
+        voicePackPicker.launch(
+            arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*"),
+        )
+    }
+
+    private fun beginVoicePackImport(uri: android.net.Uri) {
+        Toast.makeText(this, R.string.importing, Toast.LENGTH_SHORT).show()
+        thread(name = "bluefin-voice-pack-import") {
+            try {
+                val (pack, work) = VoicePackRepository.analyzeZip(this, uri)
+                val installed = runCatching { VoicePackRepository.install(this, work) }.getOrElse {
+                    (it as? VoicePackException)?.let { error ->
+                        throw error
+                    }
+                    throw VoicePackException(VoicePackReject.BAD_JSON, it.message.orEmpty())
+                }
+                VoicePackRepository.setCurrent(this, installed.id)
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    Toast.makeText(
+                        this,
+                        getString(R.string.speech_voice_status, pack.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    onVoicePackChanged()
+                    speechSectionView?.refresh()
+                    voicePackImportCallback?.invoke()
+                    voicePackImportCallback = null
+                }
+            } catch (error: VoicePackException) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    val reason = voicePackProblem(error)
+                    Toast.makeText(
+                        this,
+                        getString(R.string.speech_voice_import_failed, reason),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    voicePackImportCallback?.invoke()
+                    voicePackImportCallback = null
+                }
+            }
+        }
+    }
+
+    private fun voicePackProblem(error: VoicePackException): String = when (error.reason) {
+        VoicePackReject.BUILT_IN_ID,
+        VoicePackReject.RESERVED_ID,
+        -> getString(R.string.speech_voice_reject_reserved)
+        VoicePackReject.INVALID_ID -> getString(R.string.speech_voice_reject_invalid_id)
+        VoicePackReject.INCOMPATIBLE -> getString(R.string.speech_voice_reject_incompatible)
+        VoicePackReject.INVALID_REFERENCE, VoicePackReject.INVALID_TEXT,
+        VoicePackReject.INVALID_TUNING, VoicePackReject.BAD_JSON,
+        VoicePackReject.INCOMPLETE,
+        -> getString(R.string.speech_voice_reject_generic)
+    }
+
+    /** Called when the朗读 switch or engine state changed in settings. */
+    fun onSpeechPreferenceChanged() {
+        TtsReader.peek()?.stop()
+    }
+
+    /** Called after the timbre changed; the next reply uses it. */
+    fun onVoicePackChanged() {
+        TtsReader.peek()?.stop()
     }
 
     private fun beginPackImport(uri: android.net.Uri, folder: Boolean) {
@@ -699,6 +883,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private fun showActions() {
         if (!previewReady) return
         val appearance = PackRepository.current(this)
+        val sections = ActionVocab.of(appearance.manifest)
         val dialog = BottomSheetDialog(this)
         val view = layoutInflater.inflate(R.layout.sheet_actions, null)
         fun pick(word: String) {
@@ -709,77 +894,24 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             trigger(word)
             dialog.dismiss()
         }
-        val stand = view.findViewById<View>(R.id.action_stand)
-        if (appearance.id == PackFormat.BUILT_IN_ID) {
-            stand.visibility = View.VISIBLE
-            stand.setOnClickListener { pick("stand") }
-            fillActionGrid(view.findViewById(R.id.actions_motions), packVocab("motion"), ::pick)
-            fillActionGrid(view.findViewById(R.id.actions_expressions), packVocab("expression"), ::pick)
-        } else {
-            stand.visibility = View.GONE
-            val motions = appearance.manifest.vocab
-                .filter { it.kind == "motion" }
-                .map { it.id to it.label() }
-            val expressions = appearance.manifest.vocab
-                .filter { it.kind == "expression" }
-                .map { it.id to it.label() }
-            fillActionGrid(view.findViewById(R.id.actions_motions), motions, ::pick)
-            fillActionGrid(view.findViewById(R.id.actions_expressions), expressions, ::pick)
-            if (motions.isEmpty() && expressions.isEmpty()) {
-                val empty = TextView(this).apply {
-                    text = getString(R.string.import_no_actions)
-                    setTextColor(getColor(R.color.muted))
-                    textSize = 13f
-                    setPadding(0, dp(12), 0, dp(12))
-                }
-                (view.findViewById<View>(R.id.actions_motions).parent as? android.view.ViewGroup)
-                    ?.addView(empty)
+        fillActionGrid(view.findViewById(R.id.actions_motions), sections.motions, ::pick)
+        fillActionGrid(view.findViewById(R.id.actions_expressions), sections.expressions, ::pick)
+        view.findViewById<View>(R.id.actions_motions_header).visibility =
+            if (sections.motions.isEmpty()) View.GONE else View.VISIBLE
+        view.findViewById<View>(R.id.actions_expressions_header).visibility =
+            if (sections.expressions.isEmpty()) View.GONE else View.VISIBLE
+        if (sections.isEmpty) {
+            val empty = TextView(this).apply {
+                text = getString(R.string.import_no_actions)
+                setTextColor(getColor(R.color.muted))
+                textSize = 13f
+                setPadding(0, dp(12), 0, dp(12))
             }
+            (view.findViewById<View>(R.id.actions_motions).parent as? android.view.ViewGroup)
+                ?.addView(empty)
         }
         dialog.setContentView(view)
         dialog.show()
-    }
-
-    /**
-     * Exposes the pack's own vocabulary in the in-app drawer. figure.json stays
-     * untouched; if it cannot be read we still keep the five quick motions.
-     */
-    private fun packVocab(kind: String): List<Pair<String, String>> {
-        val fallback = if (kind == "motion") {
-            listOf(
-                "wave" to getString(R.string.action_wave),
-                "walk" to getString(R.string.action_walk),
-                "run" to getString(R.string.action_run),
-                "dance" to getString(R.string.action_dance),
-                "sleep" to getString(R.string.action_sleep),
-            )
-        } else {
-            emptyList()
-        }
-        return try {
-            val raw = assets.open("bluefin/figure.json").bufferedReader().use { it.readText() }
-            val vocab = JSONObject(raw).optJSONArray("vocab") ?: return fallback
-            val words = ArrayList<Pair<String, String>>()
-            for (i in 0 until vocab.length()) {
-                val item = vocab.optJSONObject(i) ?: continue
-                if (item.optString("kind") != kind) continue
-                val word = item.optString("id").trim()
-                if (word.isEmpty()) continue
-                val label = item.optJSONObject("names")
-                    ?.optJSONArray("zh")
-                    ?.optString(0)
-                    ?.takeIf { it.isNotBlank() }
-                    ?: word
-                words.add(word to label)
-            }
-            words.ifEmpty { fallback }
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "cannot read pack vocabulary", error)
-            fallback
-        } catch (error: IOException) {
-            Log.w(TAG, "cannot open pack vocabulary", error)
-            fallback
-        }
     }
 
     private fun fillActionGrid(
@@ -824,17 +956,24 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     }
 
     private fun showSettings(scrollToModel: Boolean = false, scrollToCharacter: Boolean = false) {
+        settingsDialog?.dismiss()
         val dialog = BottomSheetDialog(this)
+        settingsDialog = dialog
         val view = layoutInflater.inflate(R.layout.sheet_settings, null)
         val characterSectionFrame = view.findViewById<FrameLayout>(R.id.character_section)
         val modelSection = view.findViewById<android.widget.FrameLayout>(R.id.model_section)
         val personaSection = view.findViewById<android.widget.FrameLayout>(R.id.persona_section)
+        val voiceSection = view.findViewById<android.widget.FrameLayout>(R.id.voice_section)
+        val speechSection = view.findViewById<android.widget.FrameLayout>(R.id.speech_section)
         layoutInflater.inflate(R.layout.section_model_settings, modelSection, true)
         layoutInflater.inflate(R.layout.section_persona_settings, personaSection, true)
+        layoutInflater.inflate(R.layout.section_voice_settings, voiceSection, true)
         val characterSection = CharacterSection(this, characterSectionFrame)
         openCharacterSection = characterSection
         ModelSettingsSection(this, modelSection) { ChatEntry.request(this) }
         PersonaEditorSection(this, personaSection)
+        VoiceSettingsSection(this, voiceSection)
+        speechSectionView = SpeechSettingsSection(this, speechSection)
         val sound = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.sound_switch)
         val roam = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.roam_switch)
         val hide = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.hide_switch)
@@ -848,11 +987,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         val opacityValue = view.findViewById<android.widget.TextView>(R.id.opacity_value)
         val orbSizeSlider = view.findViewById<SeekBar>(R.id.orb_size_slider)
         val orbSizeValue = view.findViewById<android.widget.TextView>(R.id.orb_size_value)
-        val about = view.findViewById<android.widget.TextView>(R.id.about_body)
+        val orbTouch = OrbTouchSettings(view, prefs())
+        val petTouchThrough = view.findViewById<android.widget.CompoundButton>(R.id.pet_touch_through_switch)
+        val autoRest = view.findViewById<android.widget.CompoundButton>(R.id.auto_rest_switch)
+        val aboutVersion = view.findViewById<android.widget.TextView>(R.id.about_version)
         var syncing = false
 
         fun syncControls() {
             syncing = true
+            orbTouch.sync()
+            petTouchThrough.isChecked = BluefinStore.readClickThrough(prefs())
+            autoRest.isChecked = prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true)
             sound.isChecked = soundOn
             roam.isChecked = roamOn && (currentManifest?.canWalk != false)
             hide.isChecked = petHidden
@@ -922,8 +1067,12 @@ class MainActivity : AppCompatActivity(), BluefinHost {
                     petHidden = prefs().getBoolean(KEY_HIDDEN, false)
                     view.post { syncControls() }
                 }
-                KEY_BUBBLE_PREVIEW -> {
+                KEY_BUBBLE_PREVIEW, BluefinStore.KEY_CLICK_THROUGH, BluefinStore.KEY_AUTO_REST,
+                BluefinStore.KEY_ORB_CLICK_THROUGH, BluefinStore.KEY_ORB_OPACITY -> {
                     view.post { syncControls() }
+                }
+                BluefinStore.KEY_SPEECH_ON, BluefinStore.KEY_VOICE_PACK_ID -> {
+                    speechSectionView?.refresh()
                 }
                 KEY_CHARACTER_ID -> {
                     refreshCharacter()
@@ -944,6 +1093,10 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         }
         prefs().registerOnSharedPreferenceChangeListener(dialogPrefListener)
         dialog.setOnDismissListener {
+            if (settingsDialog === dialog) {
+                settingsDialog = null
+                OverlayLauncher.setSettingsVisible(false)
+            }
             prefs().unregisterOnSharedPreferenceChangeListener(dialogPrefListener)
             OverlayLauncher.removeListener(overlayListener)
             if (openCharacterSection === characterSection) openCharacterSection = null
@@ -975,6 +1128,12 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             petHidden = checked
             prefs().edit().putBoolean(KEY_HIDDEN, checked).apply()
             applyPetPrefs()
+        }
+        petTouchThrough.setOnCheckedChangeListener { _, checked ->
+            if (!syncing) BluefinStore.writeClickThrough(prefs(), checked)
+        }
+        autoRest.setOnCheckedChangeListener { _, checked ->
+            if (!syncing) prefs().edit().putBoolean(BluefinStore.KEY_AUTO_REST, checked).apply()
         }
         bubblePreview.setOnCheckedChangeListener { _, checked ->
             if (syncing) return@setOnCheckedChangeListener
@@ -1016,7 +1175,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             override fun onStartTrackingTouch(bar: SeekBar) = Unit
             override fun onStopTrackingTouch(bar: SeekBar) = Unit
         })
-        about.text = getString(R.string.about, installedVersionName())
+        aboutVersion.text = getString(R.string.about_version, installedVersionName())
+        view.findViewById<View>(R.id.about_licenses).setOnClickListener {
+            showAboutDetail(R.string.about_licenses_entry, R.string.about_licenses)
+        }
+        view.findViewById<View>(R.id.about_source).setOnClickListener {
+            showAboutDetail(R.string.about_source_entry, R.string.about_source)
+        }
+        view.findViewById<View>(R.id.about_privacy).setOnClickListener {
+            showAboutDetail(R.string.about_privacy_entry, R.string.about_privacy)
+        }
+        view.findViewById<View>(R.id.about_check_update).setOnClickListener { startUpdateCheck() }
         view.findViewById<View>(R.id.reset_button).setOnClickListener {
             dialog.dismiss()
             confirmReset()
@@ -1029,6 +1198,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             sheet?.layoutParams?.height = resources.displayMetrics.heightPixels
         }
         dialog.show()
+        OverlayLauncher.setSettingsVisible(true)
         if (scrollToModel) {
             view.post {
                 (view as? android.widget.ScrollView)?.smoothScrollTo(
@@ -1059,6 +1229,176 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     @Suppress("DEPRECATION")
     private fun installedVersionName(): String =
         packageManager.getPackageInfo(packageName, 0).versionName?.takeIf { it.isNotBlank() } ?: "?"
+
+    /** About keeps only the version and entries on the first screen; the full
+     *  licenses, origin and privacy notes open on demand. */
+    private fun showAboutDetail(titleRes: Int, bodyRes: Int) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(titleRes)
+            .setMessage(bodyRes)
+            .setPositiveButton(R.string.tip_done, null)
+            .show()
+    }
+
+    // ---- in-app update: check → download → verify → system installer ----
+
+    private fun coordinator(): UpdateCoordinator = updateCoordinator ?: UpdateCoordinator(
+        this,
+        object : UpdateCoordinator.Listener {
+            override fun onChecking(sourceLabel: String) = updateUi {
+                showUpdateDialog(
+                    getString(R.string.update_check_entry),
+                    getString(R.string.update_checking, sourceLabel),
+                )
+            }
+
+            override fun onAvailable(manifest: UpdateManifest, sourceLabel: String) = updateUi {
+                dismissUpdateDialog()
+                val size = manifest.sizeBytes
+                    ?.let { getString(R.string.update_size_mb, it / 1048576.0) }
+                    ?: getString(R.string.update_size_unknown)
+                val body = getString(
+                    R.string.update_available_message,
+                    manifest.notes ?: getString(R.string.update_no_notes),
+                    size,
+                    sourceLabel,
+                )
+                MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle(getString(R.string.update_available_title, manifest.versionName))
+                    .setMessage(
+                        if (sourceLabel == "GitHub") body + "\n\n" + getString(R.string.update_github_hint)
+                        else body,
+                    )
+                    .setPositiveButton(R.string.update_download_install) { _, _ ->
+                        startUpdateDownload(manifest)
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+
+            override fun onUpToDate() = updateUi {
+                dismissUpdateDialog()
+                Toast.makeText(this@MainActivity, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onProgress(read: Long, total: Long?) = updateUi {
+                val message = if (total != null && total > 0) {
+                    getString(R.string.update_downloading, (read * 100 / total).toInt())
+                } else {
+                    getString(R.string.update_downloading_unknown)
+                }
+                updateDialog?.setMessage(message)
+            }
+
+            override fun onVerifying() = updateUi {
+                updateDialog?.setMessage(getString(R.string.update_verifying))
+            }
+
+            override fun onReadyToInstall(file: File, manifest: UpdateManifest) = updateUi {
+                dismissUpdateDialog()
+                pendingInstallFile = file
+                continueUpdateInstall()
+            }
+
+            override fun onFailure(message: String) = updateUi {
+                dismissUpdateDialog()
+                val githubConfigured = listOf(
+                    BuildConfig.UPDATE_PRIMARY_MANIFEST_URL,
+                    BuildConfig.UPDATE_FALLBACK_MANIFEST_URL,
+                ).any { it.contains("github.com") }
+                MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle(R.string.update_failed_title)
+                    .setMessage(
+                        if (githubConfigured) message + "\n\n" + getString(R.string.update_github_hint)
+                        else message,
+                    )
+                    .setPositiveButton(R.string.update_retry) { _, _ -> updateRetry?.invoke() }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+
+            override fun onCancelled() = updateUi { dismissUpdateDialog() }
+        },
+    ).also { updateCoordinator = it }
+
+    private fun updateUi(block: () -> Unit) {
+        if (!isFinishing && !isDestroyed) block()
+    }
+
+    private fun showUpdateDialog(title: String, message: String) {
+        dismissUpdateDialog()
+        updateDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setNegativeButton(R.string.cancel) { _, _ -> coordinator().cancel() }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun dismissUpdateDialog() {
+        updateDialog?.dismiss()
+        updateDialog = null
+    }
+
+    private fun startUpdateCheck() {
+        if (coordinator().check()) updateRetry = { startUpdateCheck() }
+    }
+
+    private fun startUpdateDownload(manifest: UpdateManifest) {
+        if (!coordinator().download(manifest)) return
+        updateRetry = { startUpdateDownload(manifest) }
+        showUpdateDialog(
+            getString(R.string.update_download_install),
+            getString(R.string.update_downloading_unknown),
+        )
+    }
+
+    private fun clearPendingUpdate() {
+        pendingInstallFile?.delete()
+        pendingInstallFile = null
+    }
+
+    private fun showInstallLaunchFailure() {
+        clearPendingUpdate()
+        Toast.makeText(this, R.string.update_install_launch_failed, Toast.LENGTH_LONG).show()
+    }
+
+    /** The system installer always confirms; unknown-sources permission first. */
+    private fun continueUpdateInstall() {
+        val file = pendingInstallFile ?: return
+        if (!file.isFile) {
+            showInstallLaunchFailure()
+            return
+        }
+        if (!UpdateInstaller.canRequestInstalls(this)) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.update_install_unknown_title)
+                .setMessage(R.string.update_install_unknown_message)
+                .setPositiveButton(R.string.update_install_unknown_go) { _, _ ->
+                    try {
+                        updateSourcePermission.launch(UpdateInstaller.unknownSourcesIntent(this))
+                    } catch (error: android.content.ActivityNotFoundException) {
+                        showInstallLaunchFailure()
+                    } catch (error: SecurityException) {
+                        showInstallLaunchFailure()
+                    }
+                }
+                .setNegativeButton(R.string.cancel) { _, _ -> clearPendingUpdate() }
+                .setOnCancelListener { clearPendingUpdate() }
+                .show()
+            return
+        }
+        try {
+            startActivity(UpdateInstaller.installIntent(this, file))
+            pendingInstallFile = null
+        } catch (error: android.content.ActivityNotFoundException) {
+            showInstallLaunchFailure()
+        } catch (error: SecurityException) {
+            showInstallLaunchFailure()
+        } catch (error: IllegalArgumentException) {
+            showInstallLaunchFailure()
+        }
+    }
 
     private fun confirmReset() {
         MaterialAlertDialogBuilder(this)

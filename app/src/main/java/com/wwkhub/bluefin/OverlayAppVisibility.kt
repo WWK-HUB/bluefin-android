@@ -18,6 +18,7 @@ internal object OverlayAppVisibility {
     @Volatile
     var foreground: Boolean = false
         private set
+    var settingsVisible: Boolean = false
     var chatVisible: Boolean = false
         private set
 

@@ -63,6 +63,8 @@ import com.wwkhub.bluefin.bubblepreview.BubblePreviewPoint
 import com.wwkhub.bluefin.bubblepreview.BubblePreviewRect
 import com.wwkhub.bluefin.bubblepreview.BubblePreviewScreenCoordinates
 import com.wwkhub.bluefin.bubblepreview.BubblePreviewScreenSnapshot
+import com.wwkhub.bluefin.voice.VoiceMicButton
+import com.wwkhub.bluefin.voice.tts.TtsReader
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -100,6 +102,7 @@ internal class OverlayWindow(
     private val chatInput: android.widget.EditText
     private val chatSend: View
     private val chatStop: View
+    private val chatMic: com.google.android.material.button.MaterialButton
     private val chatStatus: TextView
     private val chatHint: TextView
     private val chatTitle: TextView
@@ -110,7 +113,10 @@ internal class OverlayWindow(
     private var chatExpanded = false
     private var chatSession: ChatSession? = null
     private var chatListener: ((ChatSnapshot) -> Unit)? = null
+    private var voiceMic: VoiceMicButton? = null
+    private var voiceStatusOverride: String? = null
     private var orbExpanded = false
+    private lateinit var orbControls: OrbTouchSettings
     private enum class OrbPage { MAIN, ACTIONS, APPEARANCE, REPLY }
     private var orbPage = OrbPage.MAIN
     private var replyReaderListener: ((ChatSnapshot) -> Unit)? = null
@@ -145,7 +151,20 @@ internal class OverlayWindow(
         when (key) {
             BluefinStore.KEY_SCALE, BluefinStore.KEY_SIZE, BluefinStore.KEY_OPACITY,
             BluefinStore.KEY_HIDDEN, BluefinStore.KEY_ROAM, BluefinStore.KEY_SOUND -> syncPetSettings()
-            BluefinStore.KEY_ORB_SIZE_DP -> layoutOrb()
+            BluefinStore.KEY_CLICK_THROUGH -> applyClickThroughSetting()
+            BluefinStore.KEY_ORB_SIZE_DP, BluefinStore.KEY_ORB_OPACITY -> layoutOrb()
+            BluefinStore.KEY_ORB_CLICK_THROUGH -> {
+                orbDragging = false
+                if (BluefinStore.readOrbClickThrough(prefs())) dismissBubblePreview()
+                if (orbExpanded || chatExpanded) collapseOrb() else layoutOrb()
+            }
+            BluefinStore.KEY_AUTO_REST -> {
+                lastInteract = SystemClock.uptimeMillis()
+                if (!prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true) && resting && pageReady) {
+                    resting = false
+                    web.evaluateJavascript("window.__bluefinOverlay?.act('stand')", null)
+                }
+            }
         }
     }
     private var resting = false
@@ -263,6 +282,7 @@ internal class OverlayWindow(
         chatInput = orbRoot.findViewById(R.id.overlay_chat_input)
         chatSend = orbRoot.findViewById(R.id.overlay_chat_send)
         chatStop = orbRoot.findViewById(R.id.overlay_chat_stop)
+        chatMic = orbRoot.findViewById(R.id.overlay_chat_mic)
         chatStatus = orbRoot.findViewById(R.id.overlay_chat_status)
         chatHint = orbRoot.findViewById(R.id.overlay_chat_hint)
         chatTitle = orbRoot.findViewById(R.id.overlay_chat_title)
@@ -333,6 +353,8 @@ internal class OverlayWindow(
             Log.w(TAG, "optional bubble close contained type=${error.javaClass.name}")
         } finally {
             detachReplyReader()
+            voiceMic?.detach()
+            TtsReader.peek()?.detach(this)
             web.removeCallbacks(applyPetFrame)
             prefs().unregisterOnSharedPreferenceChangeListener(petPrefsListener)
             ScreenAwareness.onOverlayReply = null
@@ -363,6 +385,15 @@ internal class OverlayWindow(
             destroyWebView()
             destroyed = true
         }
+    }
+
+    fun onSettingsVisibilityChanged() {
+        if (destroyed || !attached) return
+        if (OverlayAppVisibility.settingsVisible) {
+            dismissBubblePreview()
+            dropHitWindow()
+        }
+        if (orbExpanded || chatExpanded) collapseOrb() else layoutOrb()
     }
 
     fun syncFromPrefs() {
@@ -572,7 +603,7 @@ internal class OverlayWindow(
     private fun rebuildStage() {
         if (destroyed || !attached) return
         web = WebView(themedContext)
-        root.addView(web, FrameLayout.LayoutParams(-1, -1))
+        root.addView(web, 0, FrameLayout.LayoutParams(-1, -1))
         webDestroyed = false
         setupWebView()
         if (rendererRestarts > 1) {
@@ -590,7 +621,7 @@ internal class OverlayWindow(
         if (webDestroyed) {
             rendererRestarts = 0
             web = WebView(themedContext)
-            root.addView(web, FrameLayout.LayoutParams(-1, -1))
+            root.addView(web, 0, FrameLayout.LayoutParams(-1, -1))
             webDestroyed = false
             setupWebView()
         }
@@ -803,6 +834,9 @@ internal class OverlayWindow(
     }
 
     private fun addOrbPanelListeners() {
+        orbControls = OrbTouchSettings(orbPanel, prefs()) { enabled ->
+            if (enabled) Toast.makeText(appContext, R.string.orb_click_through_enabled, Toast.LENGTH_LONG).show()
+        }
         prefs().registerOnSharedPreferenceChangeListener(petPrefsListener)
         bindScreenAwareness()
         orbPanel.findViewById<View>(R.id.overlay_open_chat).setOnClickListener {
@@ -900,7 +934,6 @@ internal class OverlayWindow(
         ).setOnCheckedChangeListener { _, checked ->
             if (orbSyncing) return@setOnCheckedChangeListener
             BluefinStore.writeClickThrough(prefs(), checked)
-            applyClickThroughSetting()
         }
         orbPanel.findViewById<View>(R.id.overlay_hide_button).setOnClickListener {
             collapseOrb()
@@ -911,14 +944,8 @@ internal class OverlayWindow(
             handler.post { onReturnToAppRequested() }
         }
         orbPanel.findViewById<android.widget.CompoundButton>(R.id.overlay_auto_rest).apply {
-            isChecked = prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true)
             setOnCheckedChangeListener { _, enabled ->
-                prefs().edit().putBoolean(BluefinStore.KEY_AUTO_REST, enabled).apply()
-                lastInteract = SystemClock.uptimeMillis()
-                if (!enabled && resting && pageReady) {
-                    resting = false
-                    web.evaluateJavascript("window.__bluefinOverlay?.act('stand')", null)
-                }
+                if (!orbSyncing) prefs().edit().putBoolean(BluefinStore.KEY_AUTO_REST, enabled).apply()
             }
         }
         chatSettings.setOnClickListener { openModelSettingsFromOverlay() }
@@ -940,7 +967,7 @@ internal class OverlayWindow(
             if (page == OrbPage.MAIN) View.VISIBLE else View.GONE
         val detail = orbPanel.findViewById<View>(R.id.overlay_orb_detail)
         detail.visibility = if (page == OrbPage.MAIN) View.GONE else View.VISIBLE
-        detail.findViewById<View>(R.id.overlay_actions_grid).visibility =
+        detail.findViewById<View>(R.id.overlay_actions_section).visibility =
             if (page == OrbPage.ACTIONS) View.VISIBLE else View.GONE
         detail.findViewById<View>(R.id.overlay_appearance_list).visibility =
             if (page == OrbPage.APPEARANCE) View.VISIBLE else View.GONE
@@ -1060,6 +1087,11 @@ internal class OverlayWindow(
         val body = scroll.findViewById<TextView>(R.id.overlay_reply_text)
         val stop = scroll.findViewById<View>(R.id.overlay_reply_stop)
         stop.setOnClickListener { session.stop() }
+        val speak = scroll.findViewById<View>(R.id.overlay_reply_speak)
+        speak.setOnClickListener {
+            val current = session.snapshot()
+            TtsReader.shared(appContext).reread(current)
+        }
         var first = true
         val listener: (ChatSnapshot) -> Unit = listener@{ snapshot ->
             if (orbPage != OrbPage.REPLY || snapshot.requestGeneration != generation) return@listener
@@ -1078,15 +1110,17 @@ internal class OverlayWindow(
                 }
             }
             stop.visibility = if (active) View.VISIBLE else View.GONE
+            speak.visibility = if (!active && display.isNotEmpty()) View.VISIBLE else View.GONE
             first = false
         }
         replyReaderListener = listener
         session.addListener(listener)
-    }
+        TtsReader.shared(appContext).attach(this)    }
 
     private fun detachReplyReader() {
         replyReaderListener?.let { chatSession?.removeListener(it) }
         replyReaderListener = null
+        TtsReader.peek()?.stop()
     }
 
     private fun bindScreenAwareness() {
@@ -1115,6 +1149,9 @@ internal class OverlayWindow(
         val orbSizeDp = BluefinStore.readOrbSizeDp(prefs())
         orbSyncing = true
         try {
+            orbControls.sync()
+            orbPanel.findViewById<android.widget.CompoundButton>(R.id.overlay_auto_rest).isChecked =
+                prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true)
             val scaleSlider = orbPanel.findViewById<SeekBar>(R.id.overlay_size_slider)
             scaleSlider.max = 80
             scaleSlider.progress = BluefinStore.scaleToProgress(scale)
@@ -1152,7 +1189,7 @@ internal class OverlayWindow(
             }
             orbPanel.findViewById<TextView>(R.id.overlay_character_name).text =
                 uiContext.getString(R.string.orb_current_character, name)
-            refreshActionButtons()
+            if (orbPage == OrbPage.ACTIONS) refreshActionButtons()
         } finally {
             orbSyncing = false
         }
@@ -1169,72 +1206,68 @@ internal class OverlayWindow(
         if (actionGridPackId == currentPackId && actionGridPack == currentManifest) return
         actionGridPackId = currentPackId
         actionGridPack = currentManifest
-        val grid = orbPanel.findViewById<GridLayout>(R.id.overlay_actions_grid)
-        grid.removeAllViews()
-        val appearanceBuiltIn = currentPackId == PackFormat.BUILT_IN_ID
-        val words: List<Pair<String, String>> = if (appearanceBuiltIn) {
-            listOf(
-                "wave" to getString(R.string.action_wave),
-                "walk" to getString(R.string.action_walk),
-                "run" to getString(R.string.action_run),
-                "dance" to getString(R.string.action_dance),
-                "sleep" to getString(R.string.action_sleep),
-            )
-        } else {
-            currentManifest?.vocab.orEmpty().map { it.id to it.label() }
-        }
-        if (words.isEmpty()) {
-            grid.addView(TextView(themedContext).apply {
-                text = getString(R.string.import_no_actions)
-                setTextColor(themedContext.getColor(R.color.blue_deep))
-                textSize = 12f
-                setPadding(dp(4), dp(4), dp(4), dp(4))
-            })
-            return
-        }
+        val sections = ActionVocab.of(currentManifest)
+        val motionGrid = orbPanel.findViewById<GridLayout>(R.id.overlay_actions_grid)
+        val expressionGrid = orbPanel.findViewById<GridLayout>(R.id.overlay_actions_expressions)
+        motionGrid.removeAllViews()
+        expressionGrid.removeAllViews()
+        orbPanel.findViewById<View>(R.id.overlay_actions_motions_header).visibility =
+            if (sections.motions.isEmpty()) View.GONE else View.VISIBLE
+        orbPanel.findViewById<View>(R.id.overlay_actions_expressions_header).visibility =
+            if (sections.expressions.isEmpty()) View.GONE else View.VISIBLE
+        orbPanel.findViewById<View>(R.id.overlay_actions_empty).visibility =
+            if (sections.isEmpty) View.VISIBLE else View.GONE
         val canWalk = currentManifest?.canWalk != false
-        words.forEach { (word, label) ->
-            val button = com.google.android.material.button.MaterialButton(
-                themedContext,
-                null,
-                com.google.android.material.R.attr.materialButtonOutlinedStyle,
-            ).apply {
-                text = label
-                textSize = 13f
-                isAllCaps = false
-                minWidth = 0
-                minHeight = dp(48)
-                maxLines = 2
-                setTextColor(themedContext.getColor(R.color.blue_deep))
-                setPadding(dp(2), 0, dp(2), 0)
-                setOnClickListener {
-                    if (word == "walk" && !canWalk) {
-                        Toast.makeText(appContext, R.string.character_cannot_walk, Toast.LENGTH_SHORT).show()
-                        return@setOnClickListener
-                    }
-                    lastInteract = SystemClock.uptimeMillis()
-                    resting = false
-                    collapseOrb()
-                    web.evaluateJavascript(
-                        "window.__bluefinOverlay&&window.__bluefinOverlay.act(${JSONObject.quote(word)})",
-                        null,
-                    )
-                    Log.i(TAG, "orb action $word")
+        sections.motions.forEach { (word, label) -> addActionButton(motionGrid, word, label, canWalk) }
+        sections.expressions.forEach { (word, label) -> addActionButton(expressionGrid, word, label, canWalk) }
+    }
+
+    private fun addActionButton(grid: GridLayout, word: String, label: String, canWalk: Boolean) {
+        val button = com.google.android.material.button.MaterialButton(
+            themedContext,
+            null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle,
+        ).apply {
+            text = label
+            textSize = 13f
+            isAllCaps = false
+            minWidth = 0
+            minHeight = dp(48)
+            maxLines = 2
+            setTextColor(themedContext.getColor(R.color.blue_deep))
+            setPadding(dp(2), 0, dp(2), 0)
+            setOnClickListener {
+                if (!pageReady || webDestroyed) {
+                    Toast.makeText(appContext, R.string.loading, Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
                 }
+                if (word == "walk" && !canWalk) {
+                    Toast.makeText(appContext, R.string.character_cannot_walk, Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                lastInteract = SystemClock.uptimeMillis()
+                resting = false
+                collapseOrb()
+                web.evaluateJavascript(
+                    "window.__bluefinOverlay&&window.__bluefinOverlay.act(${JSONObject.quote(word)})",
+                    null,
+                )
+                Log.i(TAG, "orb action $word")
             }
-            button.layoutParams = GridLayout.LayoutParams().apply {
-                width = 0
-                height = GridLayout.LayoutParams.WRAP_CONTENT
-                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1, 1f)
-                setMargins(dp(2), dp(2), dp(2), dp(2))
-            }
-            grid.addView(button)
         }
+        button.layoutParams = GridLayout.LayoutParams().apply {
+            width = 0
+            height = GridLayout.LayoutParams.WRAP_CONTENT
+            columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1, 1f)
+            setMargins(dp(2), dp(2), dp(2), dp(2))
+        }
+        grid.addView(button)
     }
 
     private fun expandOrb() {
         dismissBubblePreview()
         hideOrbUnconfiguredPrompt()
+        refreshOrbControls()
         orbExpanded = true
         chatExpanded = false
         showOrbPage(OrbPage.MAIN)
@@ -1251,6 +1284,8 @@ internal class OverlayWindow(
         detachReplyReader()
         if (orbPage != OrbPage.MAIN) showOrbPage(OrbPage.MAIN)
         detachChatListener()
+        voiceMic?.detach()
+        TtsReader.peek()?.detach(this)
         orbPanel.animate().cancel()
         chatPanel.animate().cancel()
         orbPanel.translationX = 0f
@@ -1296,6 +1331,7 @@ internal class OverlayWindow(
         setOrbFocusable(true)
         renderChat(session.snapshot())
         bindLatestDraft()
+        attachVoiceMic()
         BluefinMotion.enter(chatPanel, x = dp(if (orbSideRight) 12 else -12).toFloat())
         if (requestInput) {
             chatInput.requestFocus()
@@ -1367,7 +1403,7 @@ internal class OverlayWindow(
                     fallbackSpeechToRecord(R.string.speech_unavailable_fallback)
                     return@post
                 }
-                if (OverlayAppVisibility.foreground) {
+                if (OverlayAppVisibility.chatVisible) {
                     fallbackSpeechToRecord(null)
                     return@post
                 }
@@ -1659,6 +1695,63 @@ internal class OverlayWindow(
         ChatEntry.openRecords(appContext)
     }
 
+    /**
+     * The mic button is created lazily on the explicit chat-panel path, never
+     * on show()/init: VoiceInput construction must stay off the overlay
+     * opening baseline locked by the contract tests.
+     */
+    private fun attachVoiceMic() {
+        if (voiceMic == null) {
+            voiceMic = VoiceMicButton(appContext, chatMic, overlayVoiceHost)
+        }
+        voiceMic?.attach()
+        // Speech output follows the same rule as the mic: attached only on the
+        // explicit chat path, so opening the orb never builds an engine.
+        TtsReader.shared(appContext).attach(this)
+    }
+
+    private val overlayVoiceHost = object : VoiceMicButton.Host {
+        override fun isChatConfigured(): Boolean =
+            chatSession?.snapshot()?.configured ?: ModelEndpointStore.isReady(appContext)
+
+        override fun isChatBusy(): Boolean {
+            val snapshot = chatSession?.snapshot() ?: return false
+            return snapshot.workerBusy ||
+                snapshot.phase == ChatPhase.THINKING ||
+                snapshot.phase == ChatPhase.STREAMING
+        }
+
+        override fun voiceStatus(text: String) {
+            voiceStatusOverride = text
+            chatStatus.text = text
+        }
+
+        override fun voiceStatusIdle() {
+            voiceStatusOverride = null
+            chatSession?.snapshot()?.let { applyChatStatus(it) }
+        }
+
+        override fun sendVoiceText(text: String) = routeVoiceText(text)
+
+        override fun voiceLookCommand(text: String) = routeVoiceText(text)
+
+        override fun voiceNotConfigured() {
+            ChatEntry.toastSendResult(appContext, ChatSendResult.NOT_CONFIGURED)
+        }
+
+        override fun stashVoiceDraft(text: String) {
+            ChatDraft.state.edit(text)
+            applyDraftText(text)
+        }
+    }
+
+    /** Recognized text joins the typed path: draft, look intercept, send. */
+    private fun routeVoiceText(text: String) {
+        ChatDraft.state.edit(text)
+        applyDraftText(text)
+        sendFromOverlay()
+    }
+
     private fun bubbleSummary(text: String): String =
         text.trim().replace('\n', ' ').replace('\r', ' ').take(80)
 
@@ -1713,7 +1806,7 @@ internal class OverlayWindow(
             else -> "${getString(R.string.chat_configured)} · ${snapshot.modelName}"
         }
         chatHint.text = text
-        chatStatus.text = text
+        chatStatus.text = voiceStatusOverride ?: text
         val settingsNeeded = !snapshot.configured ||
             snapshot.consecutiveFailures >= 5 ||
             (snapshot.phase == ChatPhase.FAILED && !snapshot.lastError.isNullOrBlank())
@@ -1802,6 +1895,29 @@ internal class OverlayWindow(
         val orbY = (orbYDp * d).roundToInt().coerceIn(0, (sh - orbSize).coerceAtLeast(0))
         val maxOrbX = (sw - orbSize - margin).coerceAtLeast(0)
         val orbX = if (orbSideRight) maxOrbX else margin.coerceIn(0, maxOrbX)
+        val passive = OverlayAppVisibility.settingsVisible || BluefinStore.readOrbClickThrough(prefs())
+        val opacity = BluefinStore.readOrbOpacityPercent(prefs()) / 100f
+        // Drawing the passive ball inside the existing non-touchable stage avoids
+        // stacking two obscuring windows, which Android 12+ can block as a tap.
+        val buttonParent = if (passive) root else orbRoot
+        if (orbButton.parent !== buttonParent) {
+            (orbButton.parent as? FrameLayout)?.removeView(orbButton)
+            buttonParent.addView(orbButton)
+            orbButton.isEnabled = !passive
+            orbButton.importantForAccessibility = if (passive) {
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            } else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        }
+        orbButton.alpha = if (passive) OverlayLayout.characterOpacity(opacity, params.alpha) else opacity
+        if (passive) {
+            removeIfAttached(orbRoot, orbAttached)
+            orbAttached = false
+            orbButton.layoutParams = FrameLayout.LayoutParams(orbSize, orbSize).apply {
+                leftMargin = orbX
+                topMargin = orbY
+            }
+            return
+        }
         val buttonParams = (orbButton.layoutParams as? FrameLayout.LayoutParams)
             ?: FrameLayout.LayoutParams(orbSize, orbSize)
         buttonParams.width = orbSize
@@ -1940,7 +2056,7 @@ internal class OverlayWindow(
     }
 
     private fun placeHit(parsed: JSONObject) {
-        if (root.visibility != View.VISIBLE || petHiddenForBubble || petOpacityForBubble <= 0f) {
+        if (OverlayAppVisibility.settingsVisible || root.visibility != View.VISIBLE || petHiddenForBubble || petOpacityForBubble <= 0f) {
             dropHitWindow()
             return
         }
@@ -2032,6 +2148,7 @@ internal class OverlayWindow(
         val visibility = if (OverlayAppVisibility.chatVisible || captureHidesOverlay || !screenInteractive) View.INVISIBLE else View.VISIBLE
         root.visibility = visibility
         orbRoot.visibility = visibility
+        if (visibility != View.VISIBLE && bubbleSignalToken != null) dismissBubblePreview()
         if (visibility != View.VISIBLE || clickThrough || petHiddenForBubble || petOpacityForBubble <= 0f) {
             dropHitWindow()
         }
@@ -2142,7 +2259,7 @@ internal class OverlayWindow(
             if (requestToken != bubbleRequestToken) return@post
             try {
                 if (destroyed || !attached || !pageReady) return@post
-                if (OverlayAppVisibility.foreground) return@post
+                if (OverlayAppVisibility.chatVisible) return@post
                 if (!BubblePreviewModule.isEnabled()) return@post
                 if (!BluefinStore.readBubblePreview(prefs())) return@post
                 val circuit = BubblePreviewExplicitChatEntry.failureCircuitOrNull() ?: return@post
@@ -2450,7 +2567,7 @@ internal class OverlayWindow(
         if (!bubbleRestoreAllowed()) return
         handler.post {
             if (token != bubbleRequestToken || destroyed) return@post
-            if (OverlayAppVisibility.foreground) return@post
+            if (OverlayAppVisibility.chatVisible) return@post
             try {
                 openChatPanel(requestInput = false, dismissBubble = false, forceRestore = true)
                 releasePanelIme()
@@ -2462,7 +2579,7 @@ internal class OverlayWindow(
 
     private fun bubbleRestoreAllowed(): Boolean =
         !destroyed && attached && pageReady &&
-            !OverlayAppVisibility.foreground &&
+            !OverlayAppVisibility.chatVisible &&
             BubblePreviewModule.isEnabled() &&
             BluefinStore.readBubblePreview(prefs()) &&
             !clickThrough && !petHiddenForBubble && petOpacityForBubble > 0f &&
@@ -2513,7 +2630,7 @@ internal class OverlayWindow(
     }
 
     private fun startAcceptedBubbleRound(token: Long) {
-        if (OverlayAppVisibility.foreground) {
+        if (OverlayAppVisibility.chatVisible) {
             bubbleAwaitingAttachToken = null
             finishBubbleFirstAttach(token, restore = true)
             return

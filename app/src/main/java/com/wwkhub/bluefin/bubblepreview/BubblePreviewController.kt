@@ -1233,7 +1233,7 @@ internal class BubblePreviewController(
     private fun isEligible(frame: BubblePreviewHostFrame): Boolean {
         if (destroyed || failedRound || window != null) return false
         if (unresolvedCleanup || orphanWindow != null) return false
-        if (OverlayAppVisibility.foreground) return false
+        if (OverlayAppVisibility.chatVisible) return false
         if (BubblePreviewProcessSession.isBlocked()) return false
         if (!BubblePreviewModule.isEnabled()) return false
         if (!BluefinStore.readBubblePreview(prefs)) return false

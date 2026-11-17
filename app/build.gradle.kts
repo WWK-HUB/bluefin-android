@@ -13,8 +13,42 @@ android {
         applicationId = "com.wwkhub.bluefin"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.9.1-rc1"
+        versionCode = 32
+        versionName = "0.11.0-rc1"
+
+        // Update sources: product decision 2026-11-16 — GitHub Releases only for
+        // now (mainland users are told a proxy may be needed). The ordered
+        // multi-source client stays: a future domestic primary is a config
+        // change here. The channel tag is a maintained pre-release holding the
+        // current manifest + APK; test builds override both sources with
+        // -PupdatePrimary/-PupdateFallback and -PupdateAllowInsecureLan=true
+        // (honored in debug builds only).
+        buildConfigField(
+            "String",
+            "UPDATE_PRIMARY_MANIFEST_URL",
+            "\"${providers.gradleProperty("updatePrimary").orNull
+                ?: "https://github.com/WWK-HUB/bluefin-android/releases/download/update-channel/update-manifest.json"}\"",
+        )
+        buildConfigField(
+            "String",
+            "UPDATE_FALLBACK_MANIFEST_URL",
+            "\"${providers.gradleProperty("updateFallback").orNull ?: ""}\"",
+        )
+        buildConfigField(
+            "boolean",
+            "UPDATE_ALLOW_INSECURE_LAN",
+            "${providers.gradleProperty("updateAllowInsecureLan").orNull == "true"}",
+        )
+
+        // sherpa-onnx ships four ABIs (~67 MB total). Distribution packages
+        // arm64 only; -PvoiceX86=true adds x86_64 for emulator verification.
+        ndk {
+            abiFilters += if (providers.gradleProperty("voiceX86").orNull == "true") {
+                listOf("arm64-v8a", "x86_64")
+            } else {
+                listOf("arm64-v8a")
+            }
+        }
     }
 
     buildTypes {
@@ -45,6 +79,9 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Offline ASR engine (Apache-2.0). Prebuilt AAR from the v2.0.1 GitHub
+    // release; the Chinese model itself is downloaded on demand, not bundled.
+    implementation(files("libs/sherpa-onnx-2.0.1.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

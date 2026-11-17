@@ -27,7 +27,7 @@ internal object BluefinStore {
     const val KEY_CLICK_THROUGH = "click_through"
 
     /**
-     * Persisted user switch for the optional read-only bubble preview. It is
+     * Persisted user switch for the floating text chat bubble. It is
      * read only from the explicit chat/display path, never from show().
      */
     const val KEY_BUBBLE_PREVIEW = "bubble_preview"
@@ -46,12 +46,24 @@ internal object BluefinStore {
 
     /** Function-orb diameter in whole dp. */
     const val KEY_ORB_SIZE_DP = "orb_size_dp"
+    const val KEY_ORB_OPACITY = "orb_opacity"
+    const val KEY_ORB_CLICK_THROUGH = "orb_click_through"
+    const val ORB_OPACITY_MIN_PERCENT = 20
 
     /** Character appearance id; the built-in pack is [PackFormat.BUILT_IN_ID]. */
     const val KEY_CHARACTER_ID = "character_id"
 
     /** Per-pack dress-up scheme: one preset id, or axis option ids joined by '-'. */
     const val KEY_CHARACTER_SCHEME_PREFIX = "character_scheme_"
+
+    /**
+     * Off by default: reading replies aloud needs a downloaded engine, so it is
+     * opt-in and never turns itself on.
+     */
+    const val KEY_SPEECH_ON = "speech_on"
+
+    /** Selected voice pack id; falls back to the first bundled pack. */
+    const val KEY_VOICE_PACK_ID = "voice_pack_id"
 
     const val KEY_OVERLAY = "overlay_on"
     const val KEY_OVERLAY_AWAITING = "overlay_awaiting_settings"
@@ -179,6 +191,20 @@ internal object BluefinStore {
         prefs.edit().putFloat(KEY_ORB_SIZE_DP, clampOrbSizeDp(value)).apply()
     }
 
+    fun readOrbOpacityPercent(prefs: SharedPreferences): Int =
+        prefs.getInt(KEY_ORB_OPACITY, 100).coerceIn(ORB_OPACITY_MIN_PERCENT, 100)
+
+    fun writeOrbOpacityPercent(prefs: SharedPreferences, percent: Int) {
+        prefs.edit().putInt(KEY_ORB_OPACITY, percent.coerceIn(ORB_OPACITY_MIN_PERCENT, 100)).apply()
+    }
+
+    fun readOrbClickThrough(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_ORB_CLICK_THROUGH, false)
+
+    fun writeOrbClickThrough(prefs: SharedPreferences, enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ORB_CLICK_THROUGH, enabled).apply()
+    }
+
     /** Absent means off: the pet keeps the rc2 poke/drag behavior by default. */
     fun readClickThrough(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(KEY_CLICK_THROUGH, false)
@@ -193,6 +219,22 @@ internal object BluefinStore {
 
     fun writeBubblePreview(prefs: SharedPreferences, enabled: Boolean) {
         prefs.edit().putBoolean(KEY_BUBBLE_PREVIEW, enabled).apply()
+    }
+
+    fun readSpeechOn(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_SPEECH_ON, false)
+
+    fun writeSpeechOn(prefs: SharedPreferences, enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SPEECH_ON, enabled).apply()
+    }
+
+    fun readVoicePackId(prefs: SharedPreferences): String? =
+        prefs.getString(KEY_VOICE_PACK_ID, null)?.takeIf { PackPaths.validId(it) }
+
+    fun writeVoicePackId(prefs: SharedPreferences, id: String?) {
+        val editor = prefs.edit()
+        if (id == null) editor.remove(KEY_VOICE_PACK_ID) else editor.putString(KEY_VOICE_PACK_ID, id)
+        editor.apply()
     }
 
     /** 0..80 whole-percent steps across S 0.50–1.30; default 0.85 is progress 35. */

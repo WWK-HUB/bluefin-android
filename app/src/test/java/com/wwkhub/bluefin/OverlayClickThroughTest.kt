@@ -49,7 +49,7 @@ class OverlayClickThroughTest {
         )
         assertTrue(listener.contains("if (orbSyncing) return@setOnCheckedChangeListener"))
         assertTrue(listener.contains("BluefinStore.writeClickThrough(prefs(), checked)"))
-        assertTrue(listener.contains("applyClickThroughSetting()"))
+        assertTrue(window.contains("BluefinStore.KEY_CLICK_THROUGH -> applyClickThroughSetting()"))
         assertFalse(listener.contains("OverlayLauncher"))
         assertFalse(listener.contains("requestPermissions"))
         assertFalse(listener.contains("canDrawOverlays"))
@@ -176,7 +176,7 @@ class OverlayClickThroughTest {
     @Test
     fun productHasTheNewCopyAndNoRc1TouchOrBubbleArtifacts() {
         val strings = source("src/main/res/values/strings.xml")
-        assertTrue(strings.contains("<string name=\"orb_click_through\">点击穿透</string>"))
+        assertTrue(strings.contains("<string name=\"orb_click_through\">宠物点击穿透</string>"))
         assertFalse(strings.contains("响应触碰"))
         assertFalse(strings.contains("touch_enabled"))
 

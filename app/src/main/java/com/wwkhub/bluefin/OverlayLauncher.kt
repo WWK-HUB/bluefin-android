@@ -217,6 +217,12 @@ internal object OverlayLauncher {
             .show()
     }
 
+    fun setSettingsVisible(visible: Boolean) {
+        if (OverlayAppVisibility.settingsVisible == visible) return
+        OverlayAppVisibility.settingsVisible = visible
+        window?.onSettingsVisibilityChanged()
+    }
+
     fun sync(context: Context) {
         window?.syncFromPrefs()
     }

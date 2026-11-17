@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/transparent">
@@ -295,6 +296,8 @@
                 android:minHeight="28dp"
                 android:progress="12" />
 
+            <include layout="@layout/section_orb_touch_settings" />
+
             <com.google.android.material.switchmaterial.SwitchMaterial
                 android:id="@+id/overlay_roam_switch"
                 android:layout_width="match_parent"
@@ -377,14 +380,62 @@
                     android:textSize="17sp"
                     android:textStyle="bold" />
 
-                <GridLayout
-                    android:id="@+id/overlay_actions_grid"
+                <LinearLayout
+                    android:id="@+id/overlay_actions_section"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:alignmentMode="alignMargins"
-                    android:columnCount="2"
-                    android:useDefaultMargins="false"
-                    android:visibility="gone" />
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/overlay_actions_motions_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingHorizontal="8dp"
+                        android:paddingBottom="4dp"
+                        android:text="@string/actions_motions"
+                        android:textColor="@color/ink"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <GridLayout
+                        android:id="@+id/overlay_actions_grid"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:alignmentMode="alignMargins"
+                        android:columnCount="2"
+                        android:useDefaultMargins="false" />
+
+                    <TextView
+                        android:id="@+id/overlay_actions_expressions_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:paddingHorizontal="8dp"
+                        android:paddingBottom="4dp"
+                        android:text="@string/actions_expressions"
+                        android:textColor="@color/ink"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <GridLayout
+                        android:id="@+id/overlay_actions_expressions"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:alignmentMode="alignMargins"
+                        android:columnCount="2"
+                        android:useDefaultMargins="false" />
+
+                    <TextView
+                        android:id="@+id/overlay_actions_empty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:padding="8dp"
+                        android:text="@string/import_no_actions"
+                        android:textColor="@color/blue_deep"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
+                </LinearLayout>
 
                 <LinearLayout
                     android:id="@+id/overlay_appearance_list"
@@ -400,6 +451,15 @@
                     android:layout_height="wrap_content"
                     android:minHeight="48dp"
                     android:text="@string/chat_stop"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlay_reply_speak"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/speech_reread"
                     android:visibility="gone" />
 
                 <TextView
@@ -478,6 +538,19 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/overlay_chat_mic"
+                style="@style/Widget.Material3.Button.IconButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="44dp"
+                android:minHeight="48dp"
+                android:contentDescription="@string/voice_mic"
+                app:icon="@drawable/ic_mic"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@color/accent" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/overlay_chat_send"

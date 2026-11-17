@@ -244,7 +244,7 @@ class BubblePreviewStageCContractTest {
         assertTrue(strings.contains("<string name=\"chat_records_title\">对话记录</string>"))
         assertTrue(strings.contains("<string name=\"chat_input_hint_overlay\">说点什么…</string>"))
         assertTrue(strings.contains("<string name=\"chat_busy_hint\">正在回复，可先停止。</string>"))
-        assertTrue(strings.contains("<string name=\"orb_records\">记录</string>"))
+        assertTrue(strings.contains("<string name=\"orb_records\">记录与语音</string>"))
         assertTrue(strings.contains("还没接通模型，要去设置里填写吗？"))
 
         val host = source("src/main/java/com/wwkhub/bluefin/OverlayWindow.kt")

@@ -178,6 +178,20 @@
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/chat_mic"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:contentDescription="@string/voice_mic"
+            app:icon="@drawable/ic_mic"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            app:iconTint="@color/accent" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/chat_send"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

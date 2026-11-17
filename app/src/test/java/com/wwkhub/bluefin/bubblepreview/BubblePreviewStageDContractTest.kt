@@ -151,25 +151,25 @@ class BubblePreviewStageDContractTest {
     }
 
     @Test
-    fun currentForegroundIsRecheckedBeforeEntryPreflightAddAndRestore() {
+    fun fullChatVisibilityIsRecheckedBeforeEntryPreflightAddAndRestore() {
         val host = source("src/main/java/com/wwkhub/bluefin/OverlayWindow.kt")
         val schedule = methodBody(host, "    private fun scheduleBubblePreviewAfterStarted(")
-        val foreground = schedule.indexOf("OverlayAppVisibility.foreground")
+        val chatVisible = schedule.indexOf("OverlayAppVisibility.chatVisible")
         val controller = schedule.indexOf("BubblePreviewController(")
-        assertTrue(foreground in 0 until controller)
+        assertTrue(chatVisible in 0 until controller)
 
         assertTrue(methodBody(host, "    private fun bubbleRestoreAllowed()")
-            .contains("!OverlayAppVisibility.foreground"))
+            .contains("!OverlayAppVisibility.chatVisible"))
         val finish = methodBody(host, "    private fun finishBubbleFirstAttach(")
         val restorePost = finish.indexOf("handler.post")
-        val postForeground = finish.indexOf("OverlayAppVisibility.foreground", restorePost)
-        assertTrue(restorePost in 0 until postForeground)
+        val postChatVisible = finish.indexOf("OverlayAppVisibility.chatVisible", restorePost)
+        assertTrue(restorePost in 0 until postChatVisible)
         assertTrue(methodBody(host, "    private fun startAcceptedBubbleRound(")
-            .contains("OverlayAppVisibility.foreground"))
+            .contains("OverlayAppVisibility.chatVisible"))
 
         val window = source("src/main/java/$modulePath/BubblePreviewController.kt")
         val eligible = methodBody(window, "    private fun isEligible(")
-        assertTrue(eligible.contains("OverlayAppVisibility.foreground"))
+        assertTrue(eligible.contains("OverlayAppVisibility.chatVisible"))
     }
 
     @Test

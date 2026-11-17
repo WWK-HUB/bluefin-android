@@ -25,16 +25,8 @@
             android:textSize="21sp"
             android:textStyle="bold" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/action_stand"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:minHeight="44dp"
-            android:text="@string/action_stand" />
-
         <TextView
+            android:id="@+id/actions_motions_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
@@ -53,6 +45,7 @@
             android:useDefaultMargins="false" />
 
         <TextView
+            android:id="@+id/actions_expressions_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"

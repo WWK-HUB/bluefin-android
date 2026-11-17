@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/orb_button_opacity"
+            android:textColor="@color/ink"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/orb_opacity_value"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/muted"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <SeekBar
+        android:id="@+id/orb_opacity_slider"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:contentDescription="@string/orb_button_opacity" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/orb_touch_through_switch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/orb_button_click_through"
+        android:textColor="@color/ink"
+        android:textSize="16sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/orb_button_click_through_help"
+        android:textColor="@color/muted"
+        android:textSize="13sp" />
+</LinearLayout>

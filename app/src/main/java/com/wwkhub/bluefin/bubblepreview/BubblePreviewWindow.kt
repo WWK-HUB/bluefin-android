@@ -171,6 +171,8 @@ internal class BubblePreviewWindow(
     private var imeFailureNotified = false
     private var imeBottomPx = 0
     private var pendingKeyboardRequest = false
+    private var keyboardAttemptsLeft = 0
+    private val requestKeyboard = Runnable { requestKeyboardIfReady() }
     private var unregisterInputBack: (() -> Unit)? = null
     private val visibleDisplayFrame = Rect()
 
@@ -238,6 +240,8 @@ internal class BubblePreviewWindow(
     }
 
     fun add() {
+        // WindowManager must see an editor window on the initial focus transfer.
+        if (mode == SpeechBubbleMode.INPUT) focusInputForTyping()
         windowManager.addView(root, params)
         added = true
         root.post {
@@ -377,11 +381,14 @@ internal class BubblePreviewWindow(
         val view = inputView ?: return
         try {
             pendingKeyboardRequest = true
-            params.flags = baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
-            params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-            if (added) windowManager.updateViewLayout(root, params)
+            keyboardAttemptsLeft = 10
+            val inputFlags = baseFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            if (params.flags != inputFlags) {
+                params.flags = inputFlags
+                params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                if (added) windowManager.updateViewLayout(root, params)
+            }
             view.requestFocus()
-            registerInputBack()
             showPendingKeyboard()
         } catch (error: Exception) {
             onInputNoSpace()
@@ -397,17 +404,29 @@ internal class BubblePreviewWindow(
     }
 
     private fun showPendingKeyboard() {
+        if (!pendingKeyboardRequest || !root.hasWindowFocus()) return
+        root.removeCallbacks(requestKeyboard)
+        root.post(requestKeyboard)
+    }
+
+    private fun requestKeyboardIfReady() {
         val view = inputView ?: return
-        if (!pendingKeyboardRequest || !view.hasWindowFocus()) return
-        view.post {
-            if (!pendingKeyboardRequest || destroyedForCleanup || closingForUser ||
-                mode != SpeechBubbleMode.INPUT || inputView !== view ||
-                !view.hasWindowFocus() || !view.hasFocus()
-            ) return@post
+        if (!pendingKeyboardRequest || !added || destroyedForCleanup || closingForUser ||
+            mode != SpeechBubbleMode.INPUT || !view.hasWindowFocus()
+        ) return
+        if (!view.hasFocus()) view.requestFocus()
+        registerInputBack()
+        val imm = view.context.getSystemService(InputMethodManager::class.java)
+        if (view.hasFocus() && imm?.isActive(view) == true &&
+            imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+        ) {
             pendingKeyboardRequest = false
-            val imm = root.context.getSystemService(InputMethodManager::class.java)
-            imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
             root.requestApplyInsets()
+        } else if (--keyboardAttemptsLeft > 0) {
+            // Window focus can arrive before the input method binds this editor.
+            root.postDelayed(requestKeyboard, 50L)
+        } else {
+            pendingKeyboardRequest = false
         }
     }
 
@@ -418,6 +437,7 @@ internal class BubblePreviewWindow(
      */
     fun releaseInputFocus() {
         pendingKeyboardRequest = false
+        root.removeCallbacks(requestKeyboard)
         imeBottomPx = 0
         try {
             unregisterInputBack?.invoke()
@@ -589,6 +609,9 @@ internal class BubblePreviewWindow(
             ellipsize = null
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             isSaveEnabled = false
+            isFocusableInTouchMode = true
+            showSoftInputOnFocus = true
+            setOnClickListener { focusInputForTyping() }
             filters = arrayOf(InputFilter.LengthFilter(ChatDraftState.MAX_DRAFT_CHARS))
             setPadding(dp(2), 0, dp(4), 0)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)

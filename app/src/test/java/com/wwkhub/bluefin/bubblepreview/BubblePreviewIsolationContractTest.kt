@@ -373,7 +373,7 @@ class BubblePreviewIsolationContractTest {
         assertTrue(layout.contains("@string/bubble_preview_help"))
         val strings = source("src/main/res/values/strings.xml")
         assertTrue(strings.contains(">对话气泡<"))
-        assertTrue(strings.contains("开启点击穿透时，可在「记录」里继续。"))
+        assertTrue(strings.contains("开启宠物点击穿透时，可在「记录」里继续。"))
 
         val activity = source("src/main/java/com/wwkhub/bluefin/MainActivity.kt")
         assertFalse(activity.contains("BubblePreviewController("))

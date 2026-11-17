@@ -11,15 +11,9 @@
     <string name="actions_title">动作</string>
     <string name="actions_motions">动作</string>
     <string name="actions_expressions">表情</string>
-    <string name="action_stand">恢复站立</string>
-    <string name="action_wave">挥手</string>
-    <string name="action_walk">行走</string>
-    <string name="action_run">跑步</string>
-    <string name="action_dance">跳舞</string>
-    <string name="action_sleep">睡觉</string>
     <string name="settings_title">设置</string>
     <string name="roam">底边走动</string>
-    <string name="roam_help">开启后，蓝鳍沿画面底边自己走、跑、停。用的是角色包里的行走和跑步帧。关掉就站着。悬浮窗里用的是同一套行走和跑步。</string>
+    <string name="roam_help">开启后沿画面底边自己走、跑、停，关掉就站着；悬浮窗共用这套走动。</string>
     <string name="size">角色大小</string>
     <string name="opacity">透明度</string>
     <string name="opacity_solid">实</string>
@@ -41,20 +35,33 @@
     <string name="overlay_opacity_limited">%1$d%%（悬浮窗上限）</string>
     <string name="orb_roam">底边走动</string>
     <string name="orb_sound">音效</string>
-    <string name="orb_click_through">点击穿透</string>
+    <string name="orb_click_through">宠物点击穿透</string>
+    <string name="orb_button_opacity">小球透明度</string>
+    <string name="orb_opacity_percent">%1$d%%</string>
+    <string name="orb_button_click_through">小球点击穿透</string>
+    <string name="orb_button_click_through_help">开启后无法点开小球。可在应用内「设置」关闭。</string>
+    <string name="orb_click_through_enabled">小球已开启穿透，可在应用内「设置」关闭</string>
     <string name="bubble_preview">对话气泡</string>
-    <string name="bubble_preview_help">点小球里的「对话」，可在角色头顶输入并查看回复。开启点击穿透时，可在「记录」里继续。</string>
+    <string name="bubble_preview_help">点小球里的「对话」，可在角色头顶输入并查看回复。开启宠物点击穿透时，可在「记录」里继续。</string>
     <string name="hide">暂停并隐藏</string>
-    <string name="hide_help">暂停走动并藏起角色。关掉后按上面的走动开关恢复。</string>
+    <string name="hide_help">暂停走动并藏起角色；关掉后按走动开关恢复。</string>
     <string name="sound">音效</string>
-    <string name="sound_help">关闭后静音页面中的声音。离线预览若没有接上音效，这个开关仍会记住偏好，并静音 WebView 里的媒体。</string>
+    <string name="sound_help">关闭后静音页面中的声音，偏好会记住。</string>
     <string name="reset">重置引导与角色</string>
     <string name="reset_title">重置</string>
     <string name="reset_message">会重新显示三步提示，并让蓝鳍回到站立。音效开关保持不变。</string>
     <string name="reset_confirm">重置</string>
     <string name="cancel">取消</string>
     <string name="about_title">关于</string>
-    <string name="about">版本 %1$s\n\n鳍遇是一款可离线互动的安卓桌宠应用，默认角色是蓝鳍。默认角色原画和动作帧来自本仓库 WWK-HUB/coopanion-bluefin-native。互动和底边走动来自 Pal AI Lab 的 Coopanion 引擎（preview/kit，AGPL），见仓库 THIRD_PARTY_NOTICES。\n\n本版可以在应用内互动，也可以在允许「显示在其他应用上层」后，让蓝鳍以悬浮窗浮在其他应用上走动、被戳和拖拽。设置「角色」中可以导入 Coopanion 兼容的角色外观包，并在内置蓝鳍和已导入外观之间切换；切换外观不会改动模型配置、对话记录或人设。文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理，密钥只保存在本机应用私有存储，可随时在设置里清除。不含语音、电脑控制、内置官方密钥。</string>
+    <string name="about_version">版本 %1$s</string>
+    <string name="about_licenses_entry">第三方许可</string>
+    <string name="about_source_entry">项目来源</string>
+    <string name="about_privacy_entry">隐私说明</string>
+    <string name="about_licenses">互动与底边走动引擎：Pal AI Lab 的 Coopanion（preview/kit，GNU AGPL v3 或更高），源码副本随仓库提供，许可文本见 preview/LICENSE-Coopanion.txt。\n\n离线语音识别与合成：sherpa-onnx（k2-fsa / Next-gen Kaldi，Apache 2.0），内含 ONNX Runtime（MIT）；中文识别模型 Paraformer（FunAudioLLM，Apache 2.0）、中文合成引擎 ZipVoice 与声码器 Vocos 均按需下载，不随安装包分发。\n\n角色原画与动作帧的许可不随引擎许可改变，见项目来源。完整清单见仓库 THIRD_PARTY_NOTICES.md。</string>
+    <string name="about_source">鳍遇是一款可离线互动的安卓桌宠应用，默认角色是蓝鳍。\n\n应用源码：github.com/WWK-HUB/bluefin-android。\n默认角色原画和动作帧：github.com/WWK-HUB/coopanion-bluefin-native（角色素材仓库，非应用源码）。\n互动引擎：github.com/Pal-AI-Lab/Coopanion。</string>
+    <string name="about_privacy">文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理。密钥只保存在本机应用私有存储，可随时在设置里清除。\n\n语音输入在本机离线识别成文字（首次使用需下载一次模型），音频不会上传、不会保存。\n\n设置「角色」中可导入 Coopanion 兼容的角色外观包并切换；切换外观不会改动模型配置、对话记录或人设。应用不会从网上自动下载角色包。\n\n朗读回复同样在本机离线合成（首次使用需下载一次引擎），文字不会上传；内置音色来自你自己的录音参考，导入的语音包也只保存在本机。
+
+不含电脑控制、内置官方密钥。</string>
     <string name="open_chat">对话</string>
     <string name="model_section_title">模型</string>
     <string name="model_provider">服务商</string>
@@ -91,7 +98,7 @@
     <string name="chat_input_hint_overlay">说点什么…</string>
     <string name="chat_records_title">对话记录</string>
     <string name="chat_collapse">收起</string>
-    <string name="orb_records">记录</string>
+    <string name="orb_records">记录与语音</string>
     <string name="chat_busy_hint">正在回复，可先停止。</string>
     <string name="chat_failed_settings_hint">连续多次失败，请检查模型设置。</string>
     <string name="chat_send">发送</string>
@@ -130,9 +137,9 @@
     <string name="notif_overlay_hide">隐藏悬浮窗</string>
     <string name="overlay_button">悬浮窗</string>
     <string name="overlay_switch">悬浮窗</string>
-    <string name="overlay_switch_help">打开后蓝鳍浮在其他应用上层，可以走动、被戳和拖拽。关闭后只留在应用里。需要「显示在其他应用上层」权限。</string>
+    <string name="overlay_switch_help">打开后浮在其他应用上层，可走动、被戳和拖拽；需要「显示在其他应用上层」权限。</string>
     <string name="overlay_prompt_reset">重新询问悬浮窗权限</string>
-    <string name="overlay_prompt_reset_help">若之前选了「先在应用内用」或没有允许，说明不会自动再出现。点这里会重新显示，然后可以再开启悬浮窗。</string>
+    <string name="overlay_prompt_reset_help">之前拒绝或选了「先在应用内用」时，点这里重新显示权限说明。</string>
     <string name="overlay_closed">悬浮窗已隐藏。</string>
     <string name="overlay_open_failed">悬浮窗打开失败，请确认「显示在其他应用上层」已开启。</string>
     <string name="overlay_open_hint">悬浮窗已打开。点右侧小球打开面板，拖动小球可沿屏幕边缘移动。</string>
@@ -145,7 +152,7 @@
     <string name="tip_step">%1$d / %2$d</string>
     <string name="tip_1">轻点角色是戳一戳。睡觉时轻点可以戳醒。</string>
     <string name="tip_2">在头上来回滑动是摸头。按住并拖动可以把他提起。</string>
-    <string name="tip_3">快速甩动后松手会抛出，落地会头晕。上方「动作」可以挥手、行走、跑步、跳舞或睡觉。他也会自己沿着底边走。</string>
+    <string name="tip_3">快速甩动后松手会抛出，落地会头晕。上方「动作」里有全部动作和表情。</string>
     <string name="tip_skip">跳过</string>
     <string name="tip_next">下一步</string>
     <string name="tip_done">知道了</string>
@@ -157,7 +164,7 @@
     <string name="character_import_zip">选择 .zip 角色包</string>
     <string name="character_import_folder">选择文件夹</string>
     <string name="importing">正在导入…</string>
-    <string name="character_import_help">从系统文件选择器选择 .zip 角色包，或选择包含角色包的文件夹。不会从网络下载。</string>
+    <string name="character_import_help">选择 .zip 角色包或包含角色包的文件夹；不会从网络下载。</string>
     <string name="character_builtin">内置</string>
     <string name="character_use">使用</string>
     <string name="character_in_use">使用中</string>
@@ -201,4 +208,25 @@
     <string name="orb_stage_failed">角色加载失败，请从小球切换外观重试。</string>
     <string name="orb_appearance_retry">外观列表加载失败，点此重试</string>
     <string name="orb_auto_rest">两分钟后自动休息</string>
+
+    <!-- 0.10 in-app update -->
+    <string name="update_check_entry">检查更新</string>
+    <string name="update_checking">正在检查更新…（%1$s）</string>
+    <string name="update_available_title">发现新版本 %1$s</string>
+    <string name="update_available_message">%1$s\n\n安装包大小：%2$s\n更新来源：%3$s\n\n下载完成后由系统确认安装。</string>
+    <string name="update_no_notes">本次更新包含问题修复与体验改进。</string>
+    <string name="update_download_install">下载并安装</string>
+    <string name="update_downloading">正在下载更新包… %1$d%%</string>
+    <string name="update_downloading_unknown">正在下载更新包…</string>
+    <string name="update_verifying">正在校验更新包…</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_failed_title">更新失败</string>
+    <string name="update_retry">重试</string>
+    <string name="update_install_unknown_title">允许安装未知应用</string>
+    <string name="update_install_unknown_message">系统需要允许鳍遇安装未知应用后才能继续安装更新。开启后返回应用即可继续。</string>
+    <string name="update_install_unknown_go">去开启</string>
+    <string name="update_size_mb">%1$.1f MB</string>
+    <string name="update_size_unknown">未知</string>
+    <string name="update_github_hint">更新包托管在 GitHub Releases，中国大陆网络可能无法直连；若检查或下载失败，请切换可访问 GitHub 的网络（如代理）后重试。</string>
+    <string name="update_install_launch_failed">无法打开系统安装界面。请返回「检查更新」后重试。</string>
 </resources>

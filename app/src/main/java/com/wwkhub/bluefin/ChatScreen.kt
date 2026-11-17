@@ -14,6 +14,8 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
+import com.wwkhub.bluefin.voice.VoiceMicButton
+import com.wwkhub.bluefin.voice.tts.TtsReader
 
 /** Full in-app conversation screen. Shares [ChatSession] with the overlay. */
 class ChatScreen : AppCompatActivity() {
@@ -29,6 +31,9 @@ class ChatScreen : AppCompatActivity() {
     private var applyingDraft = false
     private var busy = false
     private var configured = false
+    private lateinit var voiceMic: VoiceMicButton
+    private var voiceStatusOverride: String? = null
+    private var lastSnapshot: ChatSnapshot? = null
 
     private val listener: (ChatSnapshot) -> Unit = { snapshot -> render(snapshot) }
 
@@ -99,6 +104,7 @@ class ChatScreen : AppCompatActivity() {
         send.setOnClickListener { sendMessage() }
         stop.setOnClickListener { session.stop() }
         banner.setOnClickListener { openSettings() }
+        voiceMic = VoiceMicButton(this, findViewById(R.id.chat_mic), voiceHost)
 
         pendingDraftToken = intent.getLongExtra(ChatEntry.EXTRA_DRAFT_TOKEN, 0L)
             .takeIf { it > 0L }
@@ -118,9 +124,13 @@ class ChatScreen : AppCompatActivity() {
         OverlayAppVisibility.setChatVisible(true)
         bindLatestDraft()
         session.addListener(listener)
+        voiceMic.attach()
+        TtsReader.shared(this).attach(this)
     }
 
     override fun onStop() {
+        voiceMic.detach()
+        TtsReader.shared(this).detach(this)
         session.removeListener(listener)
         OverlayAppVisibility.setChatVisible(false)
         OverlayAppVisibility.setForeground(false)
@@ -176,6 +186,7 @@ class ChatScreen : AppCompatActivity() {
     }
 
     private fun render(snapshot: ChatSnapshot) {
+        lastSnapshot = snapshot
         val generating = snapshot.phase == ChatPhase.THINKING || snapshot.phase == ChatPhase.STREAMING
         busy = snapshot.workerBusy
         configured = snapshot.configured
@@ -184,14 +195,7 @@ class ChatScreen : AppCompatActivity() {
         input.isEnabled = true
         updateSendEnabled()
 
-        status.visibility = if (snapshot.phase == ChatPhase.IDLE) View.GONE else View.VISIBLE
-        status.text = when (snapshot.phase) {
-            ChatPhase.THINKING -> getString(R.string.chat_thinking)
-            ChatPhase.STREAMING -> getString(R.string.chat_streaming)
-            ChatPhase.STOPPED -> getString(R.string.chat_stopped)
-            ChatPhase.FAILED -> snapshot.lastError.orEmpty()
-            ChatPhase.IDLE -> ""
-        }
+        renderStatus(snapshot)
 
         val bannerText = when {
             !snapshot.configured -> getString(R.string.chat_unconfigured)
@@ -203,6 +207,75 @@ class ChatScreen : AppCompatActivity() {
         banner.text = bannerText
 
         transcript.render(snapshot.lines, generating)
+    }
+
+    private fun renderStatus(snapshot: ChatSnapshot) {
+        val override = voiceStatusOverride
+        if (override != null) {
+            status.visibility = View.VISIBLE
+            status.text = override
+            return
+        }
+        status.visibility = if (snapshot.phase == ChatPhase.IDLE) View.GONE else View.VISIBLE
+        status.text = when (snapshot.phase) {
+            ChatPhase.THINKING -> getString(R.string.chat_thinking)
+            ChatPhase.STREAMING -> getString(R.string.chat_streaming)
+            ChatPhase.STOPPED -> getString(R.string.chat_stopped)
+            ChatPhase.FAILED -> snapshot.lastError.orEmpty()
+            ChatPhase.IDLE -> ""
+        }
+    }
+
+    /** Voice routing reuses the typed send gates; see [sendMessage]. */
+    private val voiceHost = object : VoiceMicButton.Host {
+        override fun isChatConfigured(): Boolean = configured
+
+        override fun isChatBusy(): Boolean = busy
+
+        override fun voiceStatus(text: String) {
+            voiceStatusOverride = text
+            status.visibility = View.VISIBLE
+            status.text = text
+        }
+
+        override fun voiceStatusIdle() {
+            voiceStatusOverride = null
+            lastSnapshot?.let { renderStatus(it) }
+        }
+
+        override fun sendVoiceText(text: String) {
+            ChatDraft.state.edit(text)
+            val capture = ChatDraft.state.captureSend()
+            val result = session.send(capture.text)
+            val outcome = when (result) {
+                ChatSendResult.STARTED -> ChatDraftSendOutcome.STARTED
+                ChatSendResult.EMPTY -> ChatDraftSendOutcome.EMPTY
+                ChatSendResult.BUSY -> ChatDraftSendOutcome.BUSY
+                ChatSendResult.NOT_CONFIGURED -> ChatDraftSendOutcome.NOT_CONFIGURED
+            }
+            val latest = ChatDraft.state.onSendOutcome(capture, outcome)
+            applyDraft(latest.text)
+            if (result == ChatSendResult.STARTED) transcript.showLatest()
+            updateSendEnabled()
+        }
+
+        override fun voiceLookCommand(text: String) {
+            ChatDraft.state.edit(text)
+            ScreenAwarenessActivity.look(
+                this@ChatScreen,
+                ChatDraft.state.captureSend(),
+                fromChat = true,
+            )
+        }
+
+        override fun voiceNotConfigured() {
+            ChatEntry.showUnconfigured(this@ChatScreen)
+        }
+
+        override fun stashVoiceDraft(text: String) {
+            ChatDraft.state.edit(text)
+            applyDraft(text)
+        }
     }
 
     private fun confirmClear() {
