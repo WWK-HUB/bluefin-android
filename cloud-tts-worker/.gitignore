@@ -5,4 +5,5 @@ dist/
 dist-pages/
 dist-test/
 src/builtin-voices.ts
-*.logverify-output.mp3
+*.log
+verify-output.mp3
