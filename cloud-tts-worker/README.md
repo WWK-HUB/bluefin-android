@@ -121,3 +121,11 @@ App 验收包用 `-PcloudTtsBase=http://10.0.2.2:8787` 构建即可对接（模�
 - [x] 原始供应商错误不转发；统一安全错误码 + category
 - [x] 每设备限频/额度/并发 + 全局并发 + 注册 IP 限额 + 设备总数上限
 - [x] 音色映射按设备隔离；私有模型 visibility=private
+
+### 依赖审计说明（2026-11-18）
+
+- Mimosa 深度扫描：0 发现（调用图覆盖部分不完整，结论 inconclusive，非运行时验证）。
+- `undici`（miniflare 传递开发依赖）3 条高危公告 → 已用 overrides 固定 ^7.30.2 修复，集成测试复跑通过。
+- `sharp`（miniflare 传递开发依赖，libheif/librsvg 公告）截至 0.35.5 无修复版；
+  仅影响本地 `wrangler pages dev` 的 Images 模拟（本项目不使用），**线上部署包不含
+  sharp/undici**（esbuild 仅打包 src/ 依赖：@msgpack/msgpack）。上游发布修复版后升级即可。
