@@ -57,10 +57,33 @@ internal object BluefinStore {
     const val KEY_CHARACTER_SCHEME_PREFIX = "character_scheme_"
 
     /**
-     * Off by default: reading replies aloud needs a downloaded engine, so it is
-     * opt-in and never turns itself on.
+     * Off by default: reading replies aloud is opt-in and never turns itself
+     * on. Cloud speech needs no download; the local fallback is only offered
+     * after persistent cloud failure and explicit consent.
      */
     const val KEY_SPEECH_ON = "speech_on"
+
+    /** Auto-read completed replies; manual reread works whenever speech is on. */
+    const val KEY_AUTO_SPEECH = "auto_speech"
+
+    /** Global speaking rate 0.5–2.0 applied to both engines; default 1.0. */
+    const val KEY_SPEECH_SPEED = "speech_speed"
+
+    /** Cloud TTS worker address override (ordinary config, never a credential). */
+    const val KEY_CLOUD_TTS_BASE = "cloud_tts_base"
+
+    /** Last provider state for the settings display; runtime re-validates it. */
+    const val KEY_TTS_ENGINE_STATE = "tts_engine_state"
+
+    /** Epoch ms until which a declined fallback download must not re-prompt. */
+    const val KEY_FALLBACK_DECLINED_UNTIL = "fallback_declined_until"
+
+    /** Set only after a real post-install inference succeeds. */
+    const val KEY_ZIPVOICE_VERIFIED = "zipvoice_verified"
+
+    const val SPEECH_SPEED_MIN = 0.5f
+    const val SPEECH_SPEED_MAX = 2.0f
+    const val SPEECH_SPEED_DEFAULT = 1.0f
 
     /** Selected voice pack id; falls back to the first bundled pack. */
     const val KEY_VOICE_PACK_ID = "voice_pack_id"
@@ -224,9 +247,44 @@ internal object BluefinStore {
     fun readSpeechOn(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(KEY_SPEECH_ON, false)
 
+    /** Context-level accessor so callers never construct prefs inline. */
+    fun isSpeechOn(context: android.content.Context): Boolean =
+        readSpeechOn(context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE))
+
     fun writeSpeechOn(prefs: SharedPreferences, enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SPEECH_ON, enabled).apply()
     }
+
+    fun readAutoSpeech(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_AUTO_SPEECH, true)
+
+    fun writeAutoSpeech(prefs: SharedPreferences, enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_SPEECH, enabled).apply()
+    }
+
+    fun readSpeechSpeed(prefs: SharedPreferences): Float {
+        val raw = prefs.getFloat(KEY_SPEECH_SPEED, SPEECH_SPEED_DEFAULT)
+        return clampToRange(raw, SPEECH_SPEED_MIN, SPEECH_SPEED_MAX, SPEECH_SPEED_DEFAULT)
+    }
+
+    fun writeSpeechSpeed(prefs: SharedPreferences, value: Float) {
+        prefs.edit()
+            .putFloat(KEY_SPEECH_SPEED, clampToRange(value, SPEECH_SPEED_MIN, SPEECH_SPEED_MAX, SPEECH_SPEED_DEFAULT))
+            .apply()
+    }
+
+    fun readCloudTtsBase(prefs: SharedPreferences): String? =
+        prefs.getString(KEY_CLOUD_TTS_BASE, null)?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun writeCloudTtsBase(prefs: SharedPreferences, value: String?) {
+        val editor = prefs.edit()
+        if (value.isNullOrBlank()) editor.remove(KEY_CLOUD_TTS_BASE)
+        else editor.putString(KEY_CLOUD_TTS_BASE, value.trim())
+        editor.apply()
+    }
+
+    fun readZipVoiceVerified(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_ZIPVOICE_VERIFIED, false)
 
     fun readVoicePackId(prefs: SharedPreferences): String? =
         prefs.getString(KEY_VOICE_PACK_ID, null)?.takeIf { PackPaths.validId(it) }

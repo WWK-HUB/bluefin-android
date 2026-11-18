@@ -6,21 +6,25 @@ package com.wwkhub.bluefin.voice.tts
  * Two things matter here and both are pure string work so they can be covered
  * by JVM tests:
  *
- * - Markdown has to be stripped. ZipVoice reads every character it can tokenise,
- *   so `**加粗**` comes out as audible stars and `[文字](https://…)` reads the
- *   URL out loud.
- * - Sentences have to be short. Synthesis is slower than real time on a phone,
- *   and a 500-character paragraph would be read for minutes; the reply is capped
- *   so off-the-cuff replies stay listenable.
+ * - Markdown and control directives have to be stripped. `**加粗**` would come
+ *   out as audible stars, `[文字](https://…)` reads the URL out loud, and
+ *   `[[emotion:…]]` / `[cue]` markers are delivery directions, never lines.
+ * - Sentences should be whole semantic units. The cloud engine synthesizes
+ *   complete sentences naturally (commas included); only over-long sentences
+ *   are split further so prefetch stays granular and one failed sentence does
+ *   not sink a whole paragraph. The reply is capped so off-the-cuff replies
+ *   stay listenable.
  */
 internal object TtsText {
     /** Longest reply prefix that gets read aloud. */
     const val MAX_SPEAK_CHARS = 300
 
+    /** Sentences longer than this are split on commas for granular prefetch. */
+    const val MAX_SENTENCE_CHARS = 120
+
     /**
-     * Shortest sentence worth a synthesis call. Below this the encoder output
-     * can be fewer frames than the reference prompt and ZipVoice refuses to
-     * synthesise (it returns empty audio rather than throwing).
+     * Shortest bite worth its own synthesis call; shorter fragments merge into
+     * a neighbour so interjections keep natural prosody.
      */
     const val MIN_SENTENCE_CHARS = 2
 
@@ -37,6 +41,10 @@ internal object TtsText {
     private val emphasis = Regex("[*_~#>|]+")
     private val bullets = Regex("(?m)^\\s*([-+*]|\\d+[.)])\\s+")
 
+    /** Emotion markers and delivery cues must never be read aloud. */
+    private val emotionMarker = Regex("\\[\\[[^\\]]*\\]\\]")
+    private val deliveryCue = Regex("\\[[^\\]\\n]{0,80}\\]")
+
     fun stripMarkdown(text: String): String {
         var out = text
         out = fencedCode.replace(out, " ")
@@ -47,6 +55,8 @@ internal object TtsText {
         out = htmlTag.replace(out, " ")
         out = bullets.replace(out, "")
         out = emphasis.replace(out, "")
+        out = emotionMarker.replace(out, " ")
+        out = deliveryCue.replace(out, " ")
         // Line breaks become spaces: a heading or list item read aloud should
         // not pause as if a sentence had ended.
         out = out.replace(Regex("\\s*\\r?\\n\\s*"), " ")
@@ -56,8 +66,16 @@ internal object TtsText {
     /**
      * Splits [text] into sentences to synthesise, in order. Returns an empty list
      * when nothing is speakable (empty reply, only punctuation, only emoji).
+     *
+     * [minChars] raises the merge floor: the local ZipVoice engine returns empty
+     * audio when a sentence is shorter than its reference clip, so the fallback
+     * path merges into much longer chunks than the cloud path.
      */
-    fun sentences(text: String, limit: Int = MAX_SPEAK_CHARS): List<String> {
+    fun sentences(
+        text: String,
+        limit: Int = MAX_SPEAK_CHARS,
+        minChars: Int = MIN_SENTENCE_CHARS,
+    ): List<String> {
         val clean = stripMarkdown(text).take(limit)
         if (clean.isEmpty()) return emptyList()
 
@@ -74,7 +92,7 @@ internal object TtsText {
         flush(out, buffer)
 
         // A trailing fragment without terminal punctuation still gets read.
-        return mergeShort(out)
+        return mergeShort(out, minChars).flatMap { splitOverlong(it) }
     }
 
     private fun flush(out: MutableList<String>, buffer: StringBuilder) {
@@ -84,16 +102,16 @@ internal object TtsText {
     }
 
     /**
-     * Merges very short bites into their neighbour: `嗯。` alone is exactly the
-     * case ZipVoice synthesises to nothing, while `嗯。我在呢。` works.
+     * Merges very short bites into their neighbour so `嗯。我在呢。` reads as
+     * one natural utterance instead of two clipped fragments.
      */
-    private fun mergeShort(parts: List<String>): List<String> {
+    private fun mergeShort(parts: List<String>, minChars: Int = MIN_SENTENCE_CHARS): List<String> {
         if (parts.isEmpty()) return parts
         val merged = ArrayList<String>()
         var carry = ""
         for (part in parts) {
             val candidate = if (carry.isEmpty()) part else carry + part
-            if (speakableLength(candidate) < MIN_SENTENCE_CHARS) {
+            if (speakableLength(candidate) < minChars) {
                 carry = candidate
                 continue
             }
@@ -108,6 +126,13 @@ internal object TtsText {
             }
         }
         return merged.filter { speakableLength(it) > 0 }
+    }
+
+    /** Only over-long sentences split on commas; normal ones stay whole. */
+    private fun splitOverlong(sentence: String): List<String> {
+        if (sentence.length <= MAX_SENTENCE_CHARS) return listOf(sentence)
+        val pieces = splitOnCommas(sentence)
+        return if (pieces.isEmpty()) listOf(sentence) else pieces
     }
 
     /** Characters that survive tokenisation, used for the length checks. */

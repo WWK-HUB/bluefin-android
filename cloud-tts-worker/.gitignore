@@ -1,0 +1,8 @@
+node_modules/
+.dev.vars
+.wrangler/
+dist/
+dist-pages/
+dist-test/
+src/builtin-voices.ts
+*.logverify-output.mp3

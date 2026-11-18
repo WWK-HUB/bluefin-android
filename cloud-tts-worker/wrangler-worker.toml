@@ -1,0 +1,40 @@
+# Bluefin (鳍遇) cloud TTS proxy — Fish Audio s2.1-pro-free only.
+#
+# Secrets (set with `wrangler secret put`, NEVER committed):
+#   FISH_API_KEY       your Fish Audio API key (server-side only)
+#   TOKEN_SIGNING_KEY  random 32+ bytes, signs device session tokens
+#   ADMIN_TOKEN        random 32+ bytes, protects /admin/* routes
+#
+# Free-plan bindings: one SQLite Durable Object class handles the device
+# registry, global voice map, concurrency leases and per-device counters.
+
+name = "bluefin-tts"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+[vars]
+# Fair-use guards. All are deployer config; clients can never override them.
+MAX_TEXT_CHARS = "500"
+DEVICE_DAILY_CHARS = "20000"
+DEVICE_RATE_MAX = "12"
+DEVICE_RATE_WINDOW_MS = "60000"
+GLOBAL_CONCURRENCY = "4"
+MAX_DEVICES = "100"
+REGISTER_PER_IP_DAILY = "5"
+MAX_VOICES_PER_DEVICE = "20"
+MAX_AUDIO_BYTES = "4194304"
+UPSTREAM_TIMEOUT_MS = "30000"
+TOKEN_TTL_SECONDS = "604800"
+PROBE_MIN_INTERVAL_MS = "60000"
+
+[[kv_namespaces]]
+binding = "VOICES"
+id = "8e005d922e9242aa8092c30e24403b8a"
+
+[[durable_objects.bindings]]
+name = "GATE"
+class_name = "Gate"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Gate"]

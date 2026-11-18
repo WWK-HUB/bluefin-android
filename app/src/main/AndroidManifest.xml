@@ -61,6 +61,13 @@
             android:taskAffinity="com.wwkhub.bluefin.voice"
             android:theme="@style/Theme.Bluefin.VoiceSetup" />
         <activity
+            android:name=".FallbackSetupActivity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="com.wwkhub.bluefin.voice"
+            android:theme="@style/Theme.Bluefin.VoiceSetup" />
+        <activity
             android:name=".ChatScreen"
             android:configChanges="keyboard|keyboardHidden|navigation"
             android:exported="false"

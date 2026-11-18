@@ -162,6 +162,40 @@ class VoicePackFormatTest {
     }
 
     @Test
+    fun acceptsCloudKindWithFishReferenceId() {
+        val fishId = "9a9cf47702da476aa4629e2506d4a857"
+        val pack = VoicePackFormat.parse(
+            body(kind = "fish").replace(
+                "\"about\": \"导入的音色\"",
+                "\"about\": \"导入的音色\", \"fishReferenceId\": \"$fishId\"",
+            ),
+        )
+        assertEquals(VoicePackFormat.KIND_FISH, pack.kind)
+        assertEquals(fishId, pack.fishReferenceId)
+        // The local binding survives: one pack serves both engines.
+        assertEquals("reference.wav", pack.reference)
+    }
+
+    @Test
+    fun legacyZipVoicePacksKeepWorkingWithoutFishId() {
+        val pack = VoicePackFormat.parse(body(kind = "zipvoice"))
+        assertEquals(VoicePackFormat.KIND_ZIPVOICE, pack.kind)
+        assertEquals(null, pack.fishReferenceId)
+    }
+
+    @Test
+    fun rejectsAMalformedFishReferenceId() {
+        reject(VoicePackReject.INVALID_TUNING) {
+            VoicePackFormat.parse(
+                body(kind = "fish").replace(
+                    "\"about\": \"导入的音色\"",
+                    "\"about\": \"导入的音色\", \"fishReferenceId\": \"not-hex!\"",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun tuningDefaultsWhenOmitted() {
         val pack = VoicePackFormat.parse(
             """

@@ -354,7 +354,6 @@ internal class OverlayWindow(
         } finally {
             detachReplyReader()
             voiceMic?.detach()
-            TtsReader.peek()?.detach(this)
             web.removeCallbacks(applyPetFrame)
             prefs().unregisterOnSharedPreferenceChangeListener(petPrefsListener)
             ScreenAwareness.onOverlayReply = null
@@ -1115,12 +1114,11 @@ internal class OverlayWindow(
         }
         replyReaderListener = listener
         session.addListener(listener)
-        TtsReader.shared(appContext).attach(this)    }
+    }
 
     private fun detachReplyReader() {
         replyReaderListener?.let { chatSession?.removeListener(it) }
         replyReaderListener = null
-        TtsReader.peek()?.stop()
     }
 
     private fun bindScreenAwareness() {
@@ -1285,7 +1283,6 @@ internal class OverlayWindow(
         if (orbPage != OrbPage.MAIN) showOrbPage(OrbPage.MAIN)
         detachChatListener()
         voiceMic?.detach()
-        TtsReader.peek()?.detach(this)
         orbPanel.animate().cancel()
         chatPanel.animate().cancel()
         orbPanel.translationX = 0f
@@ -1705,9 +1702,6 @@ internal class OverlayWindow(
             voiceMic = VoiceMicButton(appContext, chatMic, overlayVoiceHost)
         }
         voiceMic?.attach()
-        // Speech output follows the same rule as the mic: attached only on the
-        // explicit chat path, so opening the orb never builds an engine.
-        TtsReader.shared(appContext).attach(this)
     }
 
     private val overlayVoiceHost = object : VoiceMicButton.Host {

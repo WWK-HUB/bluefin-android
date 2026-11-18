@@ -15,7 +15,6 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import com.wwkhub.bluefin.voice.VoiceMicButton
-import com.wwkhub.bluefin.voice.tts.TtsReader
 
 /** Full in-app conversation screen. Shares [ChatSession] with the overlay. */
 class ChatScreen : AppCompatActivity() {
@@ -125,12 +124,10 @@ class ChatScreen : AppCompatActivity() {
         bindLatestDraft()
         session.addListener(listener)
         voiceMic.attach()
-        TtsReader.shared(this).attach(this)
     }
 
     override fun onStop() {
         voiceMic.detach()
-        TtsReader.shared(this).detach(this)
         session.removeListener(listener)
         OverlayAppVisibility.setChatVisible(false)
         OverlayAppVisibility.setForeground(false)

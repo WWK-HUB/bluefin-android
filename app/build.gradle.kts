@@ -13,8 +13,8 @@ android {
         applicationId = "com.wwkhub.bluefin"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.11.0-rc1"
+        versionCode = 34
+        versionName = "0.12.0-rc1"
 
         // Update sources: product decision 2026-11-16 — GitHub Releases only for
         // now (mainland users are told a proxy may be needed). The ordered
@@ -40,7 +40,18 @@ android {
             "${providers.gradleProperty("updateAllowInsecureLan").orNull == "true"}",
         )
 
-        // sherpa-onnx ships four ABIs (~67 MB total). Distribution packages
+        // Cloud TTS worker address: ordinary configuration, never a credential.
+        // Empty by default — the user pastes their deployed Worker URL in
+        // settings (or bakes it here with -PcloudTtsBase=https://...). The
+        // Fish Audio API key lives ONLY in the worker secret, never here.
+        buildConfigField(
+            "String",
+            "CLOUD_TTS_BASE_URL",
+            "\"${providers.gradleProperty("cloudTtsBase").orNull ?: ""}\"",
+        )
+
+        // sherpa-onnx ships four ABIs (~67 MB total); it remains for offline
+        // ASR and the on-demand ZipVoice fallback. Distribution packages
         // arm64 only; -PvoiceX86=true adds x86_64 for emulator verification.
         ndk {
             abiFilters += if (providers.gradleProperty("voiceX86").orNull == "true") {

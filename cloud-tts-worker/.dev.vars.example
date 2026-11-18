@@ -1,0 +1,6 @@
+# Local development secrets for `wrangler dev`. Copy to .dev.vars and fill in.
+# NEVER commit .dev.vars. Production uses `wrangler secret put` instead.
+# For keyless contract tests use `node test/integration.mjs` (mock upstream).
+FISH_API_KEY="your-fish-audio-key-here"
+TOKEN_SIGNING_KEY="generate-with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+ADMIN_TOKEN="generate-with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""

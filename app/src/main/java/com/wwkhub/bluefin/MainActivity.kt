@@ -46,8 +46,6 @@ import com.wwkhub.bluefin.databinding.ActivityMainBinding
 import com.wwkhub.bluefin.update.UpdateCoordinator
 import com.wwkhub.bluefin.update.UpdateInstaller
 import com.wwkhub.bluefin.update.UpdateManifest
-import com.wwkhub.bluefin.voice.tts.OfflineTtsSpec
-import com.wwkhub.bluefin.voice.tts.TtsModelManager
 import com.wwkhub.bluefin.voice.tts.TtsReader
 import org.json.JSONObject
 import java.io.File
@@ -247,6 +245,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         pendingImport?.cleanup()
         pendingImport = null
         openCharacterSection = null
+        speechSectionView?.dispose()
         speechSectionView = null
         voicePackImportCallback = null
         dismissTips()
@@ -488,82 +487,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     }
 
     /**
-     * One-time语音引擎 download. The size is spelled out before anything is
-     * fetched, and the engine never ships inside the APK.
+     * On-demand ZipVoice fallback flow (consent → download → verification) in
+     * a dedicated activity so it is visible over any screen. Offered only
+     * after persistent cloud failure or from the offline settings; nothing
+     * downloads without explicit consent and the engine never ships in the APK.
      */
-    fun promptSpeechEngineDownload(onReady: () -> Unit = {}) {
+    fun promptFallbackDownload(onReady: () -> Unit = {}) {
         if (isFinishing || isDestroyed) return
-        if (TtsModelManager.isInstalled(this)) {
-            onReady()
-            return
+        FallbackSetupActivity.launch(this) { ok ->
+            if (ok) onReady()
+            speechSectionView?.refresh()
         }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.speech_engine_download)
-            .setMessage(
-                getString(R.string.speech_engine_need_engine, OfflineTtsSpec.DOWNLOAD_SIZE_HINT_MB),
-            )
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.speech_engine_download) { _, _ ->
-                runSpeechEngineDownload(onReady)
-            }
-            .show()
-    }
-
-    private fun runSpeechEngineDownload(onReady: () -> Unit) {
-        val bar = android.widget.ProgressBar(
-            this,
-            null,
-            android.R.attr.progressBarStyleHorizontal,
-        ).apply {
-            max = 100
-            isIndeterminate = true
-        }
-        val label = TextView(this).apply {
-            text = getString(R.string.speech_engine_downloading, 0)
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.ink))
-        }
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(24), dp(16), dp(24), dp(8))
-            addView(bar, android.widget.LinearLayout.LayoutParams(-1, dp(8)))
-            addView(
-                label,
-                android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) },
-            )
-        }
-        var cancelledByUser = false
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.speech_engine_download)
-            .setView(box)
-            .setCancelable(false)
-            .setNegativeButton(R.string.cancel) { _, _ ->
-                cancelledByUser = true
-                TtsModelManager.cancel()
-            }
-            .show()
-        TtsModelManager.install(
-            this,
-            onProgress = { percent ->
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    bar.isIndeterminate = false
-                    bar.progress = percent
-                    label.text = getString(R.string.speech_engine_downloading, percent)
-                }
-            },
-            onDone = { error ->
-                runOnUiThread {
-                    dialog.dismiss()
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    if (error == null) {
-                        onReady()
-                        speechSectionView?.refresh()
-                    } else if (!cancelledByUser) {
-                        Toast.makeText(this, error, Toast.LENGTH_LONG).show()
-                    }
-                }
-            },
-        )
     }
 
     fun promptVoicePackImport(onDone: () -> Unit = {}) {
@@ -1100,6 +1034,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             prefs().unregisterOnSharedPreferenceChangeListener(dialogPrefListener)
             OverlayLauncher.removeListener(overlayListener)
             if (openCharacterSection === characterSection) openCharacterSection = null
+            speechSectionView?.dispose()
         }
         view.findViewById<View>(R.id.overlay_prompt_reset).setOnClickListener {
             OverlayLauncher.resetPrompt(this)

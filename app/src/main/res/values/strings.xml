@@ -52,14 +52,15 @@
     <string name="reset_message">会重新显示三步提示，并让蓝鳍回到站立。音效开关保持不变。</string>
     <string name="reset_confirm">重置</string>
     <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
     <string name="about_title">关于</string>
     <string name="about_version">版本 %1$s</string>
     <string name="about_licenses_entry">第三方许可</string>
     <string name="about_source_entry">项目来源</string>
     <string name="about_privacy_entry">隐私说明</string>
-    <string name="about_licenses">互动与底边走动引擎：Pal AI Lab 的 Coopanion（preview/kit，GNU AGPL v3 或更高），源码副本随仓库提供，许可文本见 preview/LICENSE-Coopanion.txt。\n\n离线语音识别与合成：sherpa-onnx（k2-fsa / Next-gen Kaldi，Apache 2.0），内含 ONNX Runtime（MIT）；中文识别模型 Paraformer（FunAudioLLM，Apache 2.0）、中文合成引擎 ZipVoice 与声码器 Vocos 均按需下载，不随安装包分发。\n\n角色原画与动作帧的许可不随引擎许可改变，见项目来源。完整清单见仓库 THIRD_PARTY_NOTICES.md。</string>
+    <string name="about_licenses">互动与底边走动引擎：Pal AI Lab 的 Coopanion（preview/kit，GNU AGPL v3 或更高），源码副本随仓库提供，许可文本见 preview/LICENSE-Coopanion.txt。\n\n离线语音识别与本地备用合成：sherpa-onnx（k2-fsa / Next-gen Kaldi，Apache 2.0），内含 ONNX Runtime（MIT）；中文识别模型 Paraformer（FunAudioLLM，Apache 2.0）、本地备用合成引擎 ZipVoice 与声码器 Vocos 均按需下载，不随安装包分发。\n\n云端朗读：Fish Audio s2.1-pro-free 免费模型，经自建 Cloudflare Worker 代理调用，供应商密钥不在应用内。\n\n角色原画与动作帧的许可不随引擎许可改变，见项目来源。完整清单见仓库 THIRD_PARTY_NOTICES.md。</string>
     <string name="about_source">鳍遇是一款可离线互动的安卓桌宠应用，默认角色是蓝鳍。\n\n应用源码：github.com/WWK-HUB/bluefin-android。\n默认角色原画和动作帧：github.com/WWK-HUB/coopanion-bluefin-native（角色素材仓库，非应用源码）。\n互动引擎：github.com/Pal-AI-Lab/Coopanion。</string>
-    <string name="about_privacy">文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理。密钥只保存在本机应用私有存储，可随时在设置里清除。\n\n语音输入在本机离线识别成文字（首次使用需下载一次模型），音频不会上传、不会保存。\n\n设置「角色」中可导入 Coopanion 兼容的角色外观包并切换；切换外观不会改动模型配置、对话记录或人设。应用不会从网上自动下载角色包。\n\n朗读回复同样在本机离线合成（首次使用需下载一次引擎），文字不会上传；内置音色来自你自己的录音参考，导入的语音包也只保存在本机。
+    <string name="about_privacy">文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理。密钥只保存在本机应用私有存储，可随时在设置里清除。\n\n语音输入在本机离线识别成文字（首次使用需下载一次模型），音频不会上传、不会保存。\n\n设置「角色」中可导入 Coopanion 兼容的角色外观包并切换；切换外观不会改动模型配置、对话记录或人设。应用不会从网上自动下载角色包。\n\n朗读回复默认使用 Fish Audio 云端免费模型（s2.1-pro-free）：仅将回复文本与音色参考音频通过加密通道发送到云端代理合成，不发送聊天记录其余内容；供应商 API Key 只保存在服务端，应用内不可见、不可导出。云端持续不可用时，可在明确同意下载后使用本机 ZipVoice 离线备用合成（按需下载，不随安装包分发）。内置音色来自你自己的录音参考，导入的语音包也只保存在本机。
 
 不含电脑控制、内置官方密钥。</string>
     <string name="open_chat">对话</string>

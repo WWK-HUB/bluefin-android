@@ -20,6 +20,8 @@ internal data class ChatLine(
     val text: String,
     val stopped: Boolean = false,
     val failed: Boolean = false,
+    /** Wire name of the reply's emotion marker; null for legacy/user lines. */
+    val emotion: String? = null,
 )
 
 /**
@@ -43,6 +45,7 @@ internal object TranscriptFile {
                 val text = item.optString("text")
                 val stopped = item.optBoolean("stopped", false)
                 val failed = item.optBoolean("failed", false)
+                val emotion = item.optString("emotion").takeIf { it.isNotEmpty() }
                 if (text.isEmpty() && !stopped && !failed) continue
                 lines.add(
                     ChatLine(
@@ -50,6 +53,7 @@ internal object TranscriptFile {
                         text = text,
                         stopped = stopped,
                         failed = failed,
+                        emotion = emotion,
                     ),
                 )
             }
@@ -81,7 +85,8 @@ internal object TranscriptFile {
                     .put("role", if (line.role == ChatRole.ASSISTANT) "assistant" else "user")
                     .put("text", line.text)
                     .put("stopped", line.stopped)
-                    .put("failed", line.failed),
+                    .put("failed", line.failed)
+                    .put("emotion", line.emotion ?: ""),
             )
         }
         val staged = File(file.parentFile, "${file.name}.new")

@@ -39,13 +39,27 @@ internal data class VoicePack(
     val speed: Float,
     val numSteps: Int,
     val builtIn: Boolean,
+    /**
+     * Optional Fish Audio voice model id bound to this same character voice.
+     * The local reference clip above stays the ZipVoice binding; one pack can
+     * serve both engines without the user redesigning the voice.
+     */
+    val fishReferenceId: String? = null,
 )
 
 internal object VoicePackFormat {
     const val FORMAT_VERSION = 1
     const val MANIFEST_FILE = "voice.json"
     const val REFERENCE_FILE = "reference.wav"
+
+    /** Legacy local-engine packs stay fully supported as the fallback binding. */
     const val KIND_ZIPVOICE = "zipvoice"
+
+    /** Cloud-first packs; may still carry a local reference clip. */
+    const val KIND_FISH = "fish"
+
+    /** Fish Audio model ids are lowercase hex (Mongo ObjectId style). */
+    val FISH_REFERENCE_ID = Regex("^[0-9a-f]{24,64}$")
 
     /** Bundled packs ship in `assets/voice-packs/` and can never be removed. */
     val BUILT_IN_IDS = listOf("timbre1", "timbre2")
@@ -109,8 +123,13 @@ internal object VoicePackFormat {
         }
 
         val kind = root.field("kind")?.asString()?.trim().orEmpty()
-        if (kind != KIND_ZIPVOICE) {
+        if (kind != KIND_ZIPVOICE && kind != KIND_FISH) {
             throw VoicePackException(VoicePackReject.INCOMPATIBLE, "kind=$kind")
+        }
+
+        val fishReferenceId = root.field("fishReferenceId")?.asString()?.trim()?.lowercase()
+        if (fishReferenceId != null && !FISH_REFERENCE_ID.matches(fishReferenceId)) {
+            throw VoicePackException(VoicePackReject.INVALID_TUNING, "fishReferenceId")
         }
 
         val reference = root.field("reference")?.asString()?.trim().orEmpty()
@@ -155,6 +174,7 @@ internal object VoicePackFormat {
             speed = speed,
             numSteps = steps,
             builtIn = id in BUILT_IN_IDS,
+            fishReferenceId = fishReferenceId,
         )
     }
 

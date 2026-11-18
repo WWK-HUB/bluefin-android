@@ -21,13 +21,28 @@
         android:textColor="@color/muted"
         android:textSize="13sp" />
 
+    <TextView
+        android:id="@+id/speech_engine_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textColor="@color/muted"
+        android:textSize="13sp" />
+
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/speech_switch"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="8dp"
         android:minHeight="48dp"
         android:text="@string/speech_switch" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/speech_auto_switch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/speech_auto_switch" />
 
     <TextView
         android:layout_width="match_parent"
@@ -36,32 +51,33 @@
         android:textColor="@color/muted"
         android:textSize="13sp" />
 
-    <TextView
-        android:id="@+id/speech_engine_status"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/speech_engine_missing"
-        android:textColor="@color/muted"
-        android:textSize="13sp" />
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal">
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/speech_engine_action"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:minHeight="48dp"
-        android:text="@string/speech_engine_download" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/speech_speed_label"
+            android:textColor="@color/ink"
+            android:textSize="13sp" />
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/speech_engine_delete"
-        style="@style/Widget.Material3.Button.OutlinedButton"
+        <TextView
+            android:id="@+id/speech_speed_value"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <SeekBar
+        android:id="@+id/speech_speed_slider"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:minHeight="48dp"
-        android:text="@string/speech_engine_delete"
-        android:visibility="gone" />
+        android:max="150" />
 
     <TextView
         android:id="@+id/speech_voice_status"
@@ -96,4 +112,99 @@
         android:layout_marginTop="4dp"
         android:minHeight="48dp"
         android:text="@string/speech_voice_import" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/speech_voice_preview"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:minHeight="48dp"
+        android:text="@string/speech_voice_preview" />
+
+    <TextView
+        android:id="@+id/speech_cache_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:textColor="@color/muted"
+        android:textSize="13sp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/speech_cache_clear"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/speech_cache_clear" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/speech_offline_toggle"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:minHeight="48dp"
+        android:text="@string/speech_offline_toggle" />
+
+    <LinearLayout
+        android:id="@+id/speech_offline_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/speech_local_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/speech_local_download"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:text="@string/speech_local_download" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/speech_local_delete"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="48dp"
+            android:text="@string/speech_local_delete"
+            android:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/speech_cloud_retry"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="48dp"
+            android:text="@string/speech_cloud_retry"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/speech_cloud_addr"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:textColor="@color/muted"
+        android:textSize="13sp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/speech_cloud_edit"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/speech_cloud_edit" />
 </LinearLayout>

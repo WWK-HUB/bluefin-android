@@ -3,229 +3,222 @@ package com.wwkhub.bluefin.voice.tts
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.k2fsa.sherpa.onnx.GenerationConfig
+import com.wwkhub.bluefin.BluefinForegroundService
 import com.wwkhub.bluefin.VoicePack
 import java.io.File
 
-/**
- * Speaks reply text with the selected timbre.
- *
- * Pipeline per reply: strip Markdown → split into sentences → synthesise one
- * sentence ahead → play it through [AudioTrack] at whatever rate the engine
- * produced (24 kHz for ZipVoice) → repeat.
- *
- * Synthesis is roughly real time on a phone, so playback of sentence N runs
- * while sentence N+1 is being generated; without that overlap the pet would
- * pause for a second between every sentence.
- *
- * Audio focus is requested so music ducks instead of talking over the pet, and
- * any loss of focus (incoming call, another app starting playback) stops the
- * speech immediately rather than mixing into it.
- */
-internal class TtsSpeaker(private val context: Context) {
-
+/** Synthesizes and plays the sentences in a reply with one cancellable playback job. */
+internal class TtsSpeaker(context: Context) {
     private companion object {
         const val TAG = "BluefinTts"
-
-        /** ZipVoice returns empty audio instead of throwing when it cannot speak. */
         const val MIN_SAMPLES = 1_600
     }
 
+    private class Playback {
+        lateinit var worker: Thread
+        var track: AudioTrack? = null
+    }
+
     private val appContext = context.applicationContext
-    private val audioManager =
-        appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val main = Handler(Looper.getMainLooper())
+    private val audioManager = appContext.getSystemService(AudioManager::class.java)
+    private val attributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+    private val lock = Any()
+    @Volatile private var active: Playback? = null
 
-    @Volatile
-    private var cancelled = false
-
-    @Volatile
-    private var track: AudioTrack? = null
-
-    @Volatile
-    private var worker: Thread? = null
-
-    private var focusRequest: AudioFocusRequest? = null
-
-    /** Unit work: synthesise [text] and block while it plays. */
     fun speak(pack: VoicePack, text: String) {
+        // One sentence per native call: ZipVoice returns empty audio for
+        // multi-sentence text and its instance stays poisoned afterwards, so
+        // synthesize() below rebuilds the engine when that happens.
         val sentences = TtsText.sentences(text)
         if (sentences.isEmpty()) return
-        stopInternal(releaseFocus = true)
-        cancelled = false
-        val reference = readReference(pack) ?: return
-        val thread = Thread(
-            { run(pack, reference, sentences) },
-            "bluefin-tts-speak",
-        )
-        worker = thread.apply { isDaemon = true }.also { it.start() }
+        val playback = Playback()
+        playback.worker = Thread({ run(playback, pack, sentences) }, "bluefin-tts-speak").apply {
+            isDaemon = true
+        }
+        synchronized(lock) {
+            active?.let(::cancelLocked)
+            active = playback
+        }
+        BluefinForegroundService.refresh(appContext)
+        playback.worker.start()
     }
 
     fun stop() {
-        stopInternal(releaseFocus = true)
+        synchronized(lock) {
+            val playback = active ?: return
+            active = null
+            cancelLocked(playback)
+        }
+        main.post { BluefinForegroundService.refresh(appContext) }
     }
 
-    fun isSpeaking(): Boolean = worker?.isAlive == true
+    fun isSpeaking(): Boolean = active != null
 
-    private fun stopInternal(releaseFocus: Boolean) {
-        cancelled = true
-        runCatching { track?.pause() }
-        runCatching { track?.flush() }
-        runCatching { track?.release() }
-        track = null
-        if (releaseFocus) abandonFocus()
+    private fun cancelLocked(playback: Playback) {
+        playback.worker.interrupt()
+        playback.track?.let { track ->
+            runCatching { track.pause() }
+            runCatching { track.flush() }
+        }
     }
 
-    private fun run(pack: VoicePack, reference: FloatArray, sentences: List<String>) {
-        val engine = TtsEngineHolder.get(appContext) ?: return
-        if (!requestFocus()) return
-
+    private fun run(playback: Playback, pack: VoicePack, sentences: List<String>) {
+        var focus: AudioFocusRequest? = null
         try {
-            var pending: GeneratedTts? = synthesize(engine, pack, reference, sentences[0])
-            var index = 1
-            while (pending != null && !cancelled) {
-                // Start the next sentence while this one is still playing.
-                val next = if (index < sentences.size) {
-                    synthesize(engine, pack, reference, sentences[index]).also { index++ }
-                } else {
-                    null
+            val reference = readReference(pack) ?: return
+            Log.d(TAG, "Local playback starting sentences=${sentences.size}")
+            for ((index, sentence) in sentences.withIndex()) {
+                if (active !== playback) {
+                    Log.d(TAG, "Local playback superseded at sentence $index")
+                    return
                 }
-                playBlocking(pending)
-                pending = next
+                val generated = synthesize(playback, pack, reference, sentence) ?: continue
+                if (focus == null) {
+                    focus = requestFocus(playback) ?: return
+                }
+                playBlocking(playback, generated)
             }
-        } catch (failure: Throwable) {
-            Log.w(TAG, "speak failed type=${failure.javaClass.simpleName}")
+            Log.d(TAG, "Local playback loop complete")
+        } catch (failure: Exception) {
+            if (active === playback) Log.w(TAG, "Playback failed: ${failure.javaClass.simpleName}")
         } finally {
-            runCatching { track?.release() }
-            track = null
-            abandonFocus()
+            focus?.let { audioManager.abandonAudioFocusRequest(it) }
+            synchronized(lock) {
+                if (active === playback) active = null
+            }
+            main.post { BluefinForegroundService.refresh(appContext) }
         }
     }
 
     private class GeneratedTts(val samples: FloatArray, val sampleRate: Int)
 
     private fun synthesize(
-        engine: com.k2fsa.sherpa.onnx.OfflineTts,
+        playback: Playback,
         pack: VoicePack,
         reference: FloatArray,
         sentence: String,
     ): GeneratedTts? = synchronized(TtsEngineHolder.lock) {
-        if (cancelled) return null
-        val config = GenerationConfig(
-            0.2f, // silenceScale
-            pack.speed,
-            0, // sid
-            reference,
-            pack.sampleRate,
-            pack.referenceText,
-            pack.numSteps,
-        )
-        val audio = runCatching { engine.generateWithConfig(sentence, config) }.getOrNull()
-            ?: return null
+        if (active !== playback) return null
+        val config = GenerationConfig(0.2f, pack.speed, 0, reference, pack.sampleRate, pack.referenceText, pack.numSteps)
+        var engine = TtsEngineHolder.get(appContext) ?: return null
+        var audio = engine.generateWithConfig(sentence, config)
+        if (audio.samples.size < MIN_SAMPLES) {
+            // An empty generation poisons the native instance: every later
+            // call returns empty instantly. Rebuild once and retry so one bad
+            // sentence cannot sink the whole reply.
+            Log.w(TAG, "Empty generation; rebuilding engine and retrying once")
+            TtsEngineHolder.reset()
+            if (active !== playback) return null
+            engine = TtsEngineHolder.get(appContext) ?: return null
+            audio = engine.generateWithConfig(sentence, config)
+        }
         val samples = audio.samples
-        if (samples.size < MIN_SAMPLES) return null
+        if (samples.size < MIN_SAMPLES) {
+            Log.w(TAG, "Engine produced no playable speech for a sentence")
+            return null
+        }
         GeneratedTts(samples, audio.sampleRate)
     }
 
-    /** Writes the whole buffer in chunks and returns when it has been heard. */
-    private fun playBlocking(generated: GeneratedTts) {
-        if (cancelled) return
-        val samples = generated.samples
+    private fun playBlocking(playback: Playback, generated: GeneratedTts) {
+        val sampleRate = generated.sampleRate
         val minBuffer = AudioTrack.getMinBufferSize(
-            generated.sampleRate,
-            android.media.AudioFormat.CHANNEL_OUT_MONO,
-            android.media.AudioFormat.ENCODING_PCM_16BIT,
-        ).coerceAtLeast(4_096)
-        val shorts = ShortArray(samples.size) { index ->
+            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+        ).coerceAtLeast(8_192)
+        val samples = generated.samples
+        val pcm = ShortArray(samples.size) { index ->
             (samples[index].coerceIn(-1f, 1f) * Short.MAX_VALUE).toInt().toShort()
         }
         val player = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
+            .setAudioAttributes(attributes)
             .setAudioFormat(
-                android.media.AudioFormat.Builder()
-                    .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(generated.sampleRate)
-                    .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build(),
             )
-            .setBufferSizeInBytes(maxOf(minBuffer, shorts.size * 2))
+            .setBufferSizeInBytes(minBuffer)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-        track = player
         try {
-            player.play()
-            var offset = 0
-            val chunk = 4_096
-            while (offset < shorts.size && !cancelled) {
-                val count = minOf(chunk, shorts.size - offset)
-                val written = player.write(shorts, offset, count)
-                if (written <= 0) break
-                offset += written
+            synchronized(lock) {
+                if (active !== playback) return
+                playback.track = player
+                player.play()
             }
-            // Let the tail drain so the last syllable is not cut off.
-            if (!cancelled) player.stop()
+            var written = 0
+            while (written < pcm.size && active === playback) {
+                val count = player.write(pcm, written, minOf(4_096, pcm.size - written))
+                if (count <= 0) break
+                written += count
+            }
+            // AudioTrack.write returns when frames enter the buffer. Keep the
+            // track alive until the hardware consumes them.
+            val deadline = SystemClock.elapsedRealtime() + written * 1_000L / sampleRate + 1_000L
+            while (active === playback && player.playbackHeadPosition < written &&
+                SystemClock.elapsedRealtime() < deadline
+            ) {
+                Thread.sleep(20)
+            }
+            synchronized(lock) {
+                if (active === playback && written > 0) {
+                    player.stop()
+                    Log.d(TAG, "Playback finished: $written/${pcm.size} frames")
+                }
+            }
         } finally {
-            runCatching { player.release() }
-            if (track === player) track = null
+            synchronized(lock) {
+                playback.track = null
+                player.release()
+            }
         }
     }
 
     private fun readReference(pack: VoicePack): FloatArray? = runCatching {
         val bytes = if (pack.builtIn) {
-            appContext.assets.open("voice-packs/${pack.id}/${pack.reference}")
-                .use { it.readBytes() }
+            appContext.assets.open("voice-packs/${pack.id}/${pack.reference}").use { it.readBytes() }
         } else {
-            File(File(appContext.filesDir, "voice-packs/${pack.id}"), pack.reference)
-                .readBytes()
+            File(File(appContext.filesDir, "voice-packs/${pack.id}"), pack.reference).readBytes()
         }
         WavReader.read(bytes, pack.sampleRate)
+    }.onFailure {
+        Log.w(TAG, "Voice reference could not be read: ${it.javaClass.simpleName}")
     }.getOrNull()
 
-    private fun requestFocus(): Boolean {
-        val attributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+    private fun requestFocus(playback: Playback): AudioFocusRequest? = synchronized(lock) {
+        if (active !== playback) return null
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(attributes)
+            .setWillPauseWhenDucked(true)
+            .setOnAudioFocusChangeListener({ change ->
+                if (change < 0) {
+                    synchronized(lock) {
+                        if (active === playback) {
+                            active = null
+                            cancelLocked(playback)
+                        }
+                    }
+                }
+            }, main)
             .build()
-        val listener = AudioManager.OnAudioFocusChangeListener { change ->
-            when (change) {
-                AudioManager.AUDIOFOCUS_LOSS,
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-                -> stopInternal(releaseFocus = false)
-            }
-        }
-        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(attributes)
-                .setWillPauseWhenDucked(true)
-                .setOnAudioFocusChangeListener(listener)
-                .build()
-            focusRequest = request
-            audioManager.requestAudioFocus(request)
+        if (audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            request
         } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                listener,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
-            )
-        }
-        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
-
-    private fun abandonFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = focusRequest ?: return
-            focusRequest = null
-            runCatching { audioManager.abandonAudioFocusRequest(request) }
+            Log.w(TAG, "Audio focus request declined")
+            null
         }
     }
 }

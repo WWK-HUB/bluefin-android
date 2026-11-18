@@ -12,17 +12,25 @@ import java.net.URL
 import java.util.concurrent.CancellationException
 
 /**
- * Downloads and installs the offline TTS engine into app-private storage.
+ * On-demand download of the ZipVoice fallback engine into app-private storage.
  *
- * Nothing is bundled in the APK and nothing downloads without an explicit user
- * confirmation. Each file lands as a `.part` in a staging dir, is checked
- * against a minimum size so a truncated body can never be mistaken for a good
- * download, and the staging dir is renamed into place only after all five files
- * pass.
+ * Nothing downloads without explicit user consent, nothing ships in the APK,
+ * and an already-installed engine is never re-downloaded. Downloads support
+ * pause/resume (HTTP Range against the existing `.part`), cancel, and retry
+ * after failure; each file is size-checked before the staging dir is renamed
+ * into place. After installation the caller runs [LocalEngineVerifier] so the
+ * engine only becomes a usable fallback once a real inference succeeds.
  */
 internal object TtsModelManager {
     private const val TAG = "BluefinTts"
     private val handler = Handler(Looper.getMainLooper())
+
+    sealed class InstallResult {
+        object Success : InstallResult()
+        object Paused : InstallResult()
+        object Cancelled : InstallResult()
+        data class Failed(val message: String) : InstallResult()
+    }
 
     @Volatile
     private var installing = false
@@ -31,9 +39,13 @@ internal object TtsModelManager {
     private var cancelled = false
 
     @Volatile
+    private var paused = false
+
+    @Volatile
     private var active: HttpURLConnection? = null
 
     private class EngineCorruptException : IOException()
+    private class PauseException : IOException()
 
     fun modelDir(context: Context): File =
         File(context.applicationContext.filesDir, "tts-models/${OfflineTtsSpec.ID}")
@@ -49,6 +61,7 @@ internal object TtsModelManager {
 
     fun delete(context: Context) {
         modelDir(context).deleteRecursively()
+        stagingDir(context).deleteRecursively()
     }
 
     fun cancel() {
@@ -56,52 +69,74 @@ internal object TtsModelManager {
         active?.disconnect()
     }
 
+    /** Keeps the partial files so a later install resumes where it stopped. */
+    fun pause() {
+        paused = true
+        active?.disconnect()
+    }
+
+    /** True when a paused download left resumable partial files behind. */
+    fun hasPartialDownload(context: Context): Boolean {
+        val staging = stagingDir(context)
+        return staging.isDirectory && staging.listFiles().orEmpty().any { it.name.endsWith(".part") && it.length() > 0 }
+    }
+
     /**
      * Runs on a worker thread. [onProgress] gets 0..100 across all five files.
-     * [onDone] gets a user-facing error string, or null on success. Both on the
-     * main thread.
+     * [onDone] reports the terminal state on the main thread.
      */
-    fun install(context: Context, onProgress: (Int) -> Unit, onDone: (String?) -> Unit) {
+    fun install(context: Context, onProgress: (Int) -> Unit, onDone: (InstallResult) -> Unit) {
         if (installing) return
         installing = true
         cancelled = false
+        paused = false
         val appContext = context.applicationContext
         Thread(
             {
-                var error: String? = null
+                var result: InstallResult = InstallResult.Success
                 try {
                     downloadAndInstall(appContext, onProgress)
+                } catch (_: PauseException) {
+                    result = InstallResult.Paused
                 } catch (_: CancellationException) {
-                    error = appContext.getString(R.string.speech_engine_cancelled)
+                    result = InstallResult.Cancelled
                 } catch (_: EngineCorruptException) {
-                    error = appContext.getString(R.string.speech_engine_corrupt)
+                    result = InstallResult.Failed(appContext.getString(R.string.speech_engine_corrupt))
                 } catch (failure: Exception) {
                     Log.w(TAG, "engine install failed type=${failure.javaClass.simpleName}")
-                    error = appContext.getString(R.string.speech_engine_failed)
+                    result = InstallResult.Failed(appContext.getString(R.string.speech_engine_failed))
                 } finally {
                     installing = false
                     active = null
-                    cleanupPartial(appContext)
-                    val result = error
-                    handler.post { onDone(result) }
+                    if (result is InstallResult.Cancelled) cleanupStaging(appContext)
+                    val terminal = result
+                    handler.post { onDone(terminal) }
                 }
             },
             "bluefin-tts-model",
         ).apply { isDaemon = true }.start()
     }
 
+    private fun stagingDir(context: Context): File =
+        File(modelDir(context).parentFile, "${OfflineTtsSpec.ID}.staging")
+
     private fun downloadAndInstall(context: Context, onProgress: (Int) -> Unit) {
         val dir = modelDir(context)
         val parent = dir.parentFile ?: throw IOException("no files dir")
         parent.mkdirs()
-        val staging = File(parent, "${OfflineTtsSpec.ID}.staging")
-        staging.deleteRecursively()
+        val staging = stagingDir(context)
         staging.mkdirs()
 
         var doneBytes = 0L
         for (file in OfflineTtsSpec.FILES) {
+            val final = File(staging, file)
             val part = File(staging, "$file.part")
             val expected = OfflineTtsSpec.expectedBytes(file)
+            // A previous pause/resume may have completed this file already.
+            if (final.isFile && final.length() >= OfflineTtsSpec.minBytesFor(file)) {
+                doneBytes += expected
+                continue
+            }
             var lastError: Exception? = null
             var downloaded = false
             for (url in OfflineTtsSpec.urlsFor(file)) {
@@ -113,35 +148,34 @@ internal object TtsModelManager {
                     }
                     downloaded = true
                     break
+                } catch (pause: PauseException) {
+                    throw pause
                 } catch (cancel: CancellationException) {
                     throw cancel
                 } catch (failure: Exception) {
                     lastError = failure
                     Log.w(TAG, "engine source failed file=$file type=${failure.javaClass.simpleName}")
-                    part.delete()
+                    // Keep the partial bytes: the next source (or a retry) resumes.
                 }
             }
             if (!downloaded) throw lastError ?: IOException("no download source")
             if (part.length() < OfflineTtsSpec.minBytesFor(file)) {
-                staging.deleteRecursively()
+                part.delete()
                 throw EngineCorruptException()
             }
             doneBytes += expected
-            if (!part.renameTo(File(staging, file))) {
-                staging.deleteRecursively()
+            if (!part.renameTo(final)) {
                 throw IOException("staging rename failed")
             }
         }
 
         val sizes = OfflineTtsSpec.FILES.associateWith { File(staging, it).length() }
         if (!OfflineTtsSpec.isComplete(sizes)) {
-            staging.deleteRecursively()
             throw EngineCorruptException()
         }
         postProgress(onProgress, 100)
         dir.deleteRecursively()
         if (!staging.renameTo(dir)) {
-            staging.deleteRecursively()
             throw IOException("install rename failed")
         }
         Log.i(TAG, "tts engine installed files=${OfflineTtsSpec.FILES.size}")
@@ -153,33 +187,44 @@ internal object TtsModelManager {
         connection.connectTimeout = 20_000
         connection.readTimeout = 30_000
         connection.instanceFollowRedirects = true
+        var resumeFrom = part.takeIf { it.isFile }?.length() ?: 0L
+        if (resumeFrom > 0) connection.setRequestProperty("Range", "bytes=$resumeFrom-")
         try {
             connection.connect()
-            if (cancelled) throw CancellationException()
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                throw IOException("HTTP ${connection.responseCode}")
+            checkPaused()
+            val code = connection.responseCode
+            val appending: Boolean
+            when (code) {
+                HttpURLConnection.HTTP_PARTIAL -> appending = true
+                HttpURLConnection.HTTP_OK -> {
+                    // Server ignored Range: restart this file from zero.
+                    appending = false
+                    resumeFrom = 0L
+                    part.delete()
+                }
+                else -> throw IOException("HTTP $code")
             }
             val total = connection.contentLengthLong
             connection.inputStream.use { input ->
-                part.outputStream().use { output ->
+                // append=true keeps the paused prefix; false restarts the file.
+                java.io.FileOutputStream(part, appending).use { output ->
                     val buffer = ByteArray(64 * 1024)
-                    var received = 0L
+                    var received = resumeFrom
                     var lastPosted = -1L
                     while (true) {
-                        if (cancelled) throw CancellationException()
+                        checkPaused()
                         val read = input.read(buffer)
                         if (read < 0) break
                         output.write(buffer, 0, read)
                         received += read
-                        // Post at most ~100 updates per file.
-                        val step = if (total > 0) total / 100 else 64 * 1024
+                        val step = if (total > 0) (total + resumeFrom) / 100 else 64 * 1024
                         if (received - lastPosted >= step) {
                             lastPosted = received
                             onBytes(received)
                         }
                     }
                     output.fd.sync()
-                    if (total > 0 && received != total) throw IOException("truncated body")
+                    if (total > 0 && received != resumeFrom + total) throw IOException("truncated body")
                     onBytes(received)
                 }
             }
@@ -189,13 +234,13 @@ internal object TtsModelManager {
         }
     }
 
-    private fun cleanupPartial(context: Context) {
-        val parent = modelDir(context).parentFile ?: return
-        parent.listFiles()?.forEach { child ->
-            if (child.name.endsWith(".part") || child.name.endsWith(".staging")) {
-                child.deleteRecursively()
-            }
-        }
+    private fun checkPaused() {
+        if (cancelled) throw CancellationException()
+        if (paused) throw PauseException()
+    }
+
+    private fun cleanupStaging(context: Context) {
+        stagingDir(context).deleteRecursively()
     }
 
     private fun postProgress(onProgress: (Int) -> Unit, percent: Int) {

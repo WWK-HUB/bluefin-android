@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.wwkhub.bluefin.voice.tts.TtsReader
 
 /**
  * Ongoing notification that returns the user to the in-app preview and
@@ -131,7 +132,9 @@ class BluefinForegroundService : Service() {
         private fun isNeeded(context: Context): Boolean =
             (context.getSharedPreferences(BluefinStore.PREFS, Context.MODE_PRIVATE)
                 .getBoolean(BluefinStore.KEY_OVERLAY, false) && Settings.canDrawOverlays(context)) ||
-                ChatSession.peek()?.hasActiveWorker() == true
+                ChatSession.peek()?.hasActiveWorker() == true ||
+                ChatSession.peek()?.hasPendingSpeech() == true ||
+                TtsReader.peek()?.isSpeaking() == true
 
         fun refresh(context: Context) {
             val intent = Intent(context, BluefinForegroundService::class.java).apply {

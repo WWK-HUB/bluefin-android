@@ -1,0 +1,24 @@
+{
+  "name": "bluefin-tts-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker TTS proxy for 鳍遇 (Bluefin). Fish Audio s2.1-pro-free only; the vendor key never leaves this server.",
+  "scripts": {
+    "dev": "wrangler pages dev dist-pages",
+    "build:pages": "node scripts/build-builtin-voices.mjs && esbuild src/index.ts --bundle --format=esm --platform=neutral --main-fields=module,main --target=es2022 --conditions=worker --outfile=dist-pages/_worker.js",
+    "deploy": "npm run build:pages && wrangler pages deploy dist-pages --project-name bluefin-tts --branch main",
+    "deploy:worker": "wrangler deploy --config wrangler-worker.toml",
+    "test": "node --test test/*.test.ts",
+    "test:integration": "node test/integration.mjs",
+    "provision": "node scripts/provision-voices.mjs",
+    "verify": "node scripts/verify-deploy.mjs"
+  },
+  "devDependencies": {
+    "@breezystack/lamejs": "^1.2.7",
+    "@msgpack/msgpack": "^3.1.3",
+    "esbuild": "^0.28.2",
+    "miniflare": "^4.20260730.0",
+    "wrangler": "^4.0.0"
+  }
+}

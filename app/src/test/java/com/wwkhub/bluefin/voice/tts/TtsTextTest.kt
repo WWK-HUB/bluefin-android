@@ -100,4 +100,38 @@ class TtsTextTest {
         val sentences = TtsText.sentences("好。\n\n\n")
         assertTrue(sentences.none { it.isBlank() })
     }
+
+    @Test
+    fun stripsEmotionMarkersAndDeliveryCues() {
+        val text = TtsText.stripMarkdown("[[emotion:happy]] 你好呀 [whisper] 悄悄话")
+        assertFalse(text.contains("["))
+        assertFalse(text.contains("emotion"))
+        assertTrue(text.contains("你好呀"))
+        assertTrue(text.contains("悄悄话"))
+    }
+
+    @Test
+    fun keepsNormalSentencesWholeIncludingCommas() {
+        val sentences = TtsText.sentences("主人，你回来啦，我才没有等你呢。")
+        assertEquals(1, sentences.size)
+        assertTrue(sentences.first().contains("，"))
+    }
+
+    @Test
+    fun minCharsParameterRaisesTheMergeFloor() {
+        val merged = TtsText.sentences("你好呀。我在呢。今天开心吗？", minChars = 40)
+        assertEquals(1, merged.size)
+        // The default path keeps one sentence per native ZipVoice call.
+        val perSentence = TtsText.sentences("你好呀。我在呢。今天开心吗？")
+        assertEquals(3, perSentence.size)
+    }
+
+    @Test
+    fun splitsOnlyOverlongSentencesOnCommas() {
+        val clause = "这是一段比较长的内容，"
+        val long = clause.repeat(12) + "结尾。"
+        val sentences = TtsText.sentences(long, limit = 1000)
+        assertTrue("expected comma split for overlong sentence: $sentences", sentences.size > 1)
+        assertTrue(sentences.all { it.length <= TtsText.MAX_SENTENCE_CHARS || it == long })
+    }
 }
