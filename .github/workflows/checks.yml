@@ -18,6 +18,9 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35'
+          log-accepted-android-sdk-licenses: false
       - run: bash gradlew -PvoiceX86=true testDebugUnitTest lintDebug assembleDebug
       - name: Enable acceleration
         run: |
@@ -51,5 +54,5 @@ jobs:
           cache-dependency-path: cloud-tts-worker/package-lock.json
       - run: npm ci
       - run: npm test
-      - run: npm run test:integration
       - run: npm run build:pages
+      - run: npm run test:integration
