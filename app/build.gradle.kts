@@ -12,9 +12,10 @@ android {
     defaultConfig {
         applicationId = "com.wwkhub.bluefin"
         minSdk = 26
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.12.0-rc1"
+        versionCode = 35
+        versionName = "0.12.1-rc1"
 
         // Update sources: product decision 2026-11-16 — GitHub Releases only for
         // now (mainland users are told a proxy may be needed). The ordered
@@ -90,11 +91,16 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.work:work-runtime:2.10.1")
     // Offline ASR engine (Apache-2.0). Prebuilt AAR from the v2.0.1 GitHub
     // release; the Chinese model itself is downloaded on demand, not bundled.
     implementation(files("libs/sherpa-onnx-2.0.1.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 val repoRoot = rootProject.projectDir.parentFile

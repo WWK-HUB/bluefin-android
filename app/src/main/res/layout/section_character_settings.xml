@@ -5,22 +5,6 @@
     android:layout_marginTop="18dp"
     android:orientation="vertical">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/character_title"
-        android:textColor="@color/ink"
-        android:textSize="18sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:text="@string/character_import_help"
-        android:textColor="@color/muted"
-        android:textSize="13sp" />
-
     <LinearLayout
         android:id="@+id/character_list"
         android:layout_width="match_parent"

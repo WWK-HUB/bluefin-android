@@ -40,6 +40,7 @@ export const ERRORS = {
   rateLimited: { status: 429, error: "rate_limited", category: "RATE_LIMITED", message: "请求过于频繁，请稍后再试。" },
   quotaExceeded: { status: 429, error: "quota_exceeded", category: "QUOTA_EXHAUSTED", message: "今日朗读额度已用完，明天再试。" },
   busy: { status: 429, error: "busy", category: "RATE_LIMITED", message: "语音服务正忙，请稍后再试。" },
+  deviceBusy: { status: 429, error: "device_busy", category: "RATE_LIMITED", message: "本设备正在生成语音，请稍等片刻再试。" },
   upstreamBusy: { status: 429, error: "upstream_busy", category: "RATE_LIMITED", message: "语音服务繁忙，请稍后再试。" },
   upstreamError: { status: 502, error: "upstream_error", category: "SERVICE_UNAVAILABLE", message: "语音服务暂不可用，请稍后再试。" },
   upstreamNetwork: { status: 502, error: "upstream_network", category: "TEMPORARY_NETWORK_ERROR", message: "网络波动，语音服务连接失败。" },

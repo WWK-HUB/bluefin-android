@@ -284,8 +284,6 @@ class OverlayLayoutTest {
         assertTrue(strings.contains(">显示悬浮窗<"))
         assertTrue(strings.contains(">隐藏悬浮窗<"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionName = \"0.12.0-rc1\""))
-        assertTrue(gradle.contains("versionCode = 34"))
         assertTrue(strings.contains("重新询问悬浮窗权限"))
         assertTrue(strings.contains(">透明度<"))
         assertTrue(strings.contains(">实<"))

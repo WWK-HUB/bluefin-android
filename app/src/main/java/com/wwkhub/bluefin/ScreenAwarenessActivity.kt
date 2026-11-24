@@ -174,7 +174,7 @@ class ScreenAwarenessActivity : AppCompatActivity() {
     private fun showSettings() {
         val toggle = MaterialSwitch(this).apply {
             id = SWITCH_ID
-            text = "定时观察"
+            setText(R.string.continuous_screen)
             isChecked = ScreenAwareness.service?.isPeriodic() == true
         }
         val status = TextView(this).apply {
@@ -193,7 +193,9 @@ class ScreenAwarenessActivity : AppCompatActivity() {
         content.addView(toggle)
         content.addView(intervalField)
         content.addView(TextView(this).apply {
-            text = "定时观察会按间隔向当前模型发送一张截图，最近结果显示在这里。点「看屏幕」可立即看一眼。"
+            val model = ModelEndpointStore.load(this@ScreenAwarenessActivity).model
+                .ifBlank { getString(R.string.continuous_screen_model) }
+            text = getString(R.string.continuous_screen_disclosure, model)
             setPadding(0, dp(12), 0, dp(8))
         })
         content.addView(status)
@@ -232,7 +234,7 @@ class ScreenAwarenessActivity : AppCompatActivity() {
         }
         toggle.setOnClickListener {
             if (!toggle.isChecked) {
-                ScreenAwareness.service?.endSession("已关闭定时观察。")
+                ScreenAwareness.service?.endSession("已关闭持续看屏。")
                 status.text = statusText()
             } else if (saveInterval()) {
                 val current = ScreenAwareness.service
@@ -316,7 +318,7 @@ class ScreenAwarenessActivity : AppCompatActivity() {
     }
 
     private fun statusText(): String = listOfNotNull(
-        ScreenAwareness.status.ifBlank { "定时观察已关闭。" },
+        ScreenAwareness.status.ifBlank { "持续看屏已关闭。" },
         ScreenAwareness.checkedAt?.let { "最近检查 · ${formatTime(it)}" },
         ScreenAwareness.succeededAt?.let { "最近成功 · ${formatTime(it)}" },
         ScreenAwareness.latestSummary?.let { "最近看到\n$it" },

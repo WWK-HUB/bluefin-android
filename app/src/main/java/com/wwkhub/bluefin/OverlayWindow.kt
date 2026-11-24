@@ -212,6 +212,7 @@ internal class OverlayWindow(
     private var bubbleSignalStartIndex: Int = -1
     private var bubbleSignalGeneration: Int = -1
     private var bubblePendingSummary: String = ""
+    private var bubbleObservationPermit: (() -> Boolean)? = null
     private var bubblePendingGeneration: Int = -1
     private var bubbleFirstAttach: BubblePreviewFirstAttachFlow? = null
     private var bubbleFirstAttachToken: Long = 0L
@@ -357,6 +358,7 @@ internal class OverlayWindow(
             web.removeCallbacks(applyPetFrame)
             prefs().unregisterOnSharedPreferenceChangeListener(petPrefsListener)
             ScreenAwareness.onOverlayReply = null
+            ScreenAwareness.onOverlayObservation = null
             ScreenAwareness.hideOverlayForCapture = null
             OverlayAppVisibility.removeChatVisibilityListener(chatVisibilityListener)
             if (bubble?.hasUnresolvedCleanup() != true) bubblePreview = null
@@ -1133,12 +1135,28 @@ internal class OverlayWindow(
                 true
             } else false
         }
+        ScreenAwareness.onOverlayObservation = { snapshot, canShow ->
+            val index = snapshot.responseStartIndex
+            if (index != null && bubbleRestoreAllowed() && bubbleSignalToken == null && canShowScreenRemark()) {
+                chatSession = ChatSession.shared(appContext)
+                scheduleBubblePreviewAfterStarted(
+                    userSummary = "",
+                    acceptedGeneration = snapshot.requestGeneration,
+                    responseStartIndex = index,
+                    observationPermit = canShow,
+                )
+            }
+        }
         ScreenAwareness.hideOverlayForCapture = { hide ->
             captureHidesOverlay = hide
             if (hide) dismissBubblePreview()
             updateOverlayVisibility()
         }
     }
+
+    private fun canShowScreenRemark(): Boolean =
+        !orbExpanded && !chatExpanded && !captureHidesOverlay &&
+            !bubbleInputPending && bubblePreview?.isInputMode() != true
 
     private fun refreshOrbControls() {
         if (destroyed) return
@@ -1780,6 +1798,7 @@ internal class OverlayWindow(
             endpoint.url,
             endpoint.model,
             ModelEndpointStore.hasSavedKey(appContext),
+            endpoint.format,
         )
         chatHint.text = if (ready) {
             "${getString(R.string.chat_configured)} · ${endpoint.model}"
@@ -2245,14 +2264,20 @@ internal class OverlayWindow(
         userSummary: String,
         acceptedGeneration: Int,
         responseStartIndex: Int,
+        observationPermit: (() -> Boolean)? = null,
     ) {
         val requestToken = ++bubbleRequestToken
         bubblePendingSummary = userSummary
+        bubbleObservationPermit = observationPermit
         bubblePendingGeneration = acceptedGeneration
         handler.post {
             if (requestToken != bubbleRequestToken) return@post
             try {
                 if (destroyed || !attached || !pageReady) return@post
+                if (observationPermit != null &&
+                    (!canShowScreenRemark() || !observationPermit() || bubbleSignalToken != null ||
+                        chatSession?.idleGeneration() != acceptedGeneration)
+                ) return@post
                 if (OverlayAppVisibility.chatVisible) return@post
                 if (!BubblePreviewModule.isEnabled()) return@post
                 if (!BluefinStore.readBubblePreview(prefs())) return@post
@@ -2343,6 +2368,7 @@ internal class OverlayWindow(
                     bubbleAwaitingAttachToken = null
                     bubbleInputPending = false
                     cancelSpeechInputDeadline()
+                    if (bubbleObservationPermit != null) return@postBubbleCallback
                     if (orbExpanded || chatExpanded) collapseOrb()
                     bubblePreview?.focusInput()
                 }
@@ -2409,6 +2435,7 @@ internal class OverlayWindow(
             ) {
                 postBubbleCallback("finished", token) {
                     if (bubbleSignalToken == token) bubbleSignalToken = null
+                    bubbleObservationPermit = null
                     if (bubbleFirstAttachToken == token) cancelBubbleFirstAttach()
                     if (bubbleAwaitingAttachToken == token) bubbleAwaitingAttachToken = null
                     if (bubbleInputToken == token) {
@@ -2558,6 +2585,10 @@ internal class OverlayWindow(
             Log.w(TAG, "bubble first-attach dismiss contained type=${error.javaClass.name}")
         }
         bubbleDisplayAttempt = null
+        if (bubbleObservationPermit != null) {
+            bubbleObservationPermit = null
+            return
+        }
         if (!bubbleRestoreAllowed()) return
         handler.post {
             if (token != bubbleRequestToken || destroyed) return@post
@@ -2586,9 +2617,12 @@ internal class OverlayWindow(
             cancelBubbleFirstAttach()
             return
         }
-        if (!bubbleRestoreAllowed()) {
+        if (!bubbleRestoreAllowed() ||
+            bubbleObservationPermit?.let { !canShowScreenRemark() || !it() } == true
+        ) {
             cancelBubbleFirstAttach()
             bubbleSignalToken = null
+            bubbleObservationPermit = null
             detachBubbleChatListener()
             try {
                 bubblePreview?.dismissForHostUi()
@@ -2783,6 +2817,7 @@ internal class OverlayWindow(
         cancelSpeechInputDeadline()
         bubbleInputToken = 0L
         bubbleInputPending = false
+        bubbleObservationPermit = null
         bubbleSignalToken = null
         bubbleAwaitingAttachToken = null
         detachBubbleChatListener()
@@ -2802,6 +2837,7 @@ internal class OverlayWindow(
         cancelBubbleFirstAttach()
         cancelSpeechInputDeadline()
         bubbleInputPending = false
+        bubbleObservationPermit = null
         bubbleInputToken = 0L
         bubbleSignalToken = null
         bubbleAwaitingAttachToken = null

@@ -36,4 +36,10 @@ class TtsCacheKeyTest {
             TtsCache.key("x", "v", 1.01f, "neutral"),
         )
     }
+    @Test
+    fun cacheKeysSeparateServiceAndPackRevision() {
+        val key = TtsCache.key("x", "voice", 1f, "neutral", "https://a.example", 1)
+        assertNotEquals(key, TtsCache.key("x", "voice", 1f, "neutral", "https://b.example", 1))
+        assertNotEquals(key, TtsCache.key("x", "voice", 1f, "neutral", "https://a.example", 2))
+    }
 }

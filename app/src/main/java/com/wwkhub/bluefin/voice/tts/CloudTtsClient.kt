@@ -1,6 +1,5 @@
 package com.wwkhub.bluefin.voice.tts
 
-import android.content.Context
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,13 +15,15 @@ import java.util.concurrent.CancellationException
  * worker secret and cannot appear here. Tokens and request bodies are never
  * logged.
  */
-internal class CloudTtsClient(private val context: Context) {
-    private val appContext = context.applicationContext
+internal class CloudTtsClient(val baseUrl: String) {
+    private var cancelled = false
 
     @Volatile
     private var active: HttpURLConnection? = null
 
+    @Synchronized
     fun cancel() {
+        cancelled = true
         active?.disconnect()
     }
 
@@ -70,26 +71,33 @@ internal class CloudTtsClient(private val context: Context) {
     fun listVoices(token: String): JSONArray =
         postJson("/v1/voices", token, null, method = "GET").optJSONArray("voices") ?: JSONArray()
 
-    fun uploadVoice(token: String, voiceId: String, name: String, audio: ByteArray, referenceText: String): JSONObject {
+    fun uploadVoice(
+        token: String, voiceId: String, name: String, audio: ByteArray, referenceText: String, bindingId: String,
+    ): JSONObject {
         val body = JSONObject()
             .put("voiceId", voiceId)
             .put("name", name)
             .put("audio", Base64.encodeToString(audio, Base64.NO_WRAP))
             .put("audioType", "audio/wav")
             .put("referenceText", referenceText)
+            .put("bindingId", bindingId)
         return postJson("/v1/voices", token, body)
     }
 
-    fun linkVoice(token: String, voiceId: String, fishReferenceId: String, name: String): JSONObject {
+    fun linkVoice(token: String, voiceId: String, fishReferenceId: String, name: String, bindingId: String): JSONObject {
         val body = JSONObject()
             .put("voiceId", voiceId)
             .put("fishModelId", fishReferenceId)
+            .put("bindingId", bindingId)
             .put("name", name)
         return postJson("/v1/voices/link", token, body)
     }
 
-    fun deleteVoice(token: String, voiceId: String) {
-        postJson("/v1/voices/$voiceId", token, null, method = "DELETE")
+    fun deleteVoice(token: String, voiceId: String, bindingId: String?) {
+        val body = bindingId?.let { JSONObject().put("bindingId", it) }
+        if (!postJson("/v1/voices/$voiceId", token, body, method = "DELETE").optBoolean("deleted")) {
+            throw TtsFailure(TtsCategory.UNKNOWN_ERROR, "delete_unconfirmed", "云端尚未确认删除。")
+        }
     }
 
     // ---- plumbing ----------------------------------------------------------
@@ -109,12 +117,13 @@ internal class CloudTtsClient(private val context: Context) {
     }
 
     private fun open(path: String, token: String?, body: JSONObject?, method: String = "POST"): HttpURLConnection {
-        val base = CloudTtsConfig.baseUrl(appContext)
-        if (base.isEmpty()) {
+        if (baseUrl.isEmpty()) {
             throw TtsFailure(TtsCategory.UNKNOWN_ERROR, "not_configured", "云端语音服务地址未配置。")
         }
-        val connection = URL(base + path).openConnection() as HttpURLConnection
-        active = connection
+        val connection = synchronized(this) {
+            if (cancelled) throw CancellationException("request cancelled")
+            (URL(baseUrl + path).openConnection() as HttpURLConnection).also { active = it }
+        }
         connection.requestMethod = method
         connection.connectTimeout = 15_000
         connection.readTimeout = 45_000

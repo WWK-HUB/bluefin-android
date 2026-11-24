@@ -9,7 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -22,6 +24,8 @@ import com.wwkhub.bluefin.voice.tts.TtsReader
  * separate TYPE_APPLICATION_OVERLAY, not this foreground service.
  */
 class BluefinForegroundService : Service() {
+    private var promotedStartId = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -40,12 +44,21 @@ class BluefinForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        if (!isNeeded(this)) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
-        return START_STICKY
+        promotedStartId = startId
+        foregroundService = this
+        return if (stopWhenIdle()) START_NOT_STICKY else START_STICKY
+    }
+
+    private fun stopWhenIdle(): Boolean {
+        if (isNeeded(this) || !stopSelfResult(promotedStartId)) return false
+        if (foregroundService === this) foregroundService = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        return true
+    }
+
+    override fun onDestroy() {
+        if (foregroundService === this) foregroundService = null
+        super.onDestroy()
     }
 
     private fun buildNotification(): Notification {
@@ -128,6 +141,8 @@ class BluefinForegroundService : Service() {
         const val ACTION_RETURN = "com.wwkhub.bluefin.action.RETURN"
         private const val ACTION_TOGGLE_OVERLAY = "com.wwkhub.bluefin.action.TOGGLE_OVERLAY"
         private const val ACTION_REFRESH = "com.wwkhub.bluefin.action.REFRESH_NOTIFICATION"
+        private val main = Handler(Looper.getMainLooper())
+        private var foregroundService: BluefinForegroundService? = null
 
         private fun isNeeded(context: Context): Boolean =
             (context.getSharedPreferences(BluefinStore.PREFS, Context.MODE_PRIVATE)
@@ -137,15 +152,22 @@ class BluefinForegroundService : Service() {
                 TtsReader.peek()?.isSpeaking() == true
 
         fun refresh(context: Context) {
+            val app = context.applicationContext
+            if (Looper.myLooper() != main.looper) {
+                main.post { refresh(app) }
+                return
+            }
+            if (!isNeeded(app)) {
+                // A queued foreground start must reach startForeground even if a
+                // fast chat reply or audio job has already finished.
+                foregroundService?.stopWhenIdle()
+                return
+            }
             val intent = Intent(context, BluefinForegroundService::class.java).apply {
                 action = ACTION_REFRESH
             }
-            if (!isNeeded(context)) {
-                context.stopService(intent)
-                return
-            }
             try {
-                ContextCompat.startForegroundService(context, intent)
+                ContextCompat.startForegroundService(app, intent)
             } catch (error: IllegalStateException) {
                 Log.w(TAG, "foreground service start deferred type=${error.javaClass.simpleName}")
             } catch (error: SecurityException) {

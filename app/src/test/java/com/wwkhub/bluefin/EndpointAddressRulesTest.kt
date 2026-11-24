@@ -77,6 +77,56 @@ class EndpointAddressRulesTest {
     }
 
     @Test
+    fun gatewayQueryIsPreservedAfterTheCompletionPath() {
+        assertEquals(
+            "https://gateway.example/v1/chat/completions?route=a%2Fb/",
+            EndpointAddressPolicy.completionsUrl("https://gateway.example/v1/?route=a%2Fb/"),
+        )
+        assertEquals(
+            "https://gateway.example/v1/chat/completions?route=a%2Fb",
+            EndpointAddressPolicy.completionsUrl("https://gateway.example/v1/chat/completions?route=a%2Fb"),
+        )
+    }
+
+    @Test
+    fun modelSettingsIdentifyEndpointsForOtherApiProtocols() {
+        for (address in listOf(
+            "https://api.deepseek.com/anthropic",
+            "https://api.anthropic.com/v1/messages",
+            "https://gateway.example/api/v1/responses",
+        )) {
+            assertEquals(
+                EndpointAddressPolicy.Check.Invalid(EndpointAddressPolicy.CHAT_PROTOCOL_HINT),
+                EndpointAddressPolicy.checkChatAddress(address),
+            )
+        }
+        assertTrue(EndpointAddressPolicy.checkChatAddress("https://api.anthropic.com/v1") is EndpointAddressPolicy.Check.Invalid)
+        assertTrue(EndpointAddressPolicy.checkChatAddress("https://gateway.example/chat/completions", ModelApiFormat.ANTHROPIC)
+            is EndpointAddressPolicy.Check.Invalid)
+    }
+
+    @Test
+    fun messagesUrlSupportsGatewayPrefixesFullAddressesAndQueries() {
+        val format = ModelApiFormat.ANTHROPIC
+        assertEquals("https://api.anthropic.com/v1/messages", EndpointAddressPolicy.completionsUrl("https://api.anthropic.com", format))
+        assertEquals("https://api.deepseek.com/anthropic/v1/messages", EndpointAddressPolicy.completionsUrl("https://api.deepseek.com/anthropic", format))
+        for (url in listOf("https://gateway.example/team", "https://gateway.example/team/v1/", "https://gateway.example/team/v1/messages")) {
+            assertEquals("https://gateway.example/team/v1/messages?tenant=a%2Fb/",
+                EndpointAddressPolicy.completionsUrl("$url?tenant=a%2Fb/", format))
+        }
+        assertEquals("https://api.openai.com/v1/chat/completions", EndpointAddressPolicy.completionsUrl("https://api.openai.com"))
+    }
+
+    @Test
+    fun credentialOriginIgnoresPathsButRespectsSchemeHostAndPort() {
+        assertTrue(EndpointAddressPolicy.sameOrigin("https://GATEWAY.example/v1", "https://gateway.example:443/alternate?route=1"))
+        assertFalse(EndpointAddressPolicy.sameOrigin("https://gateway.example", "https://gateway.example:8000"))
+        assertFalse(EndpointAddressPolicy.sameOrigin("https://gateway.example", "https://gateway-2.example"))
+        assertFalse(EndpointAddressPolicy.sameOrigin("https://localhost", "http://localhost"))
+        assertTrue(EndpointAddressPolicy.checkChatAddress("https://user:secret@gateway.example") is EndpointAddressPolicy.Check.Invalid)
+    }
+
+    @Test
     fun failureCopyPointsAtTheRightFieldWithoutSecrets() {
         assertTrue(ChatFailureText.forStatus(401).contains("API Key"))
         assertTrue(ChatFailureText.forStatus(403).contains("API Key"))

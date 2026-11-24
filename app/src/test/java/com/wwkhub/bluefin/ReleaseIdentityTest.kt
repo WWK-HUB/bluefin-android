@@ -24,8 +24,8 @@ class ReleaseIdentityTest {
     @Test
     fun versionAndPackageMatchTheRelease() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionName = \"0.12.0-rc1\""))
-        assertTrue(gradle.contains("versionCode = 34"))
+        assertTrue(gradle.contains("versionName = \"0.12.1-rc1\""))
+        assertTrue(gradle.contains("versionCode = 35"))
         assertFalse(gradle.contains("0.6.0-rc3"))
         assertFalse(gradle.contains("versionCode = 21"))
         assertTrue(gradle.contains("applicationId = \"com.wwkhub.bluefin\""))

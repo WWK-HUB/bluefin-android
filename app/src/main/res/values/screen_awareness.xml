@@ -5,6 +5,9 @@
     <string name="look_screen_disclosure">授权后，本次截图会直接发送给模型 %1$s。</string>
     <string name="picked_screen_disclosure">这张截图将发送给当前模型 %1$s。</string>
     <string name="screen_awareness">屏幕观察</string>
+    <string name="continuous_screen">持续看屏</string>
+    <string name="continuous_screen_model">当前视觉模型</string>
+    <string name="continuous_screen_disclosure">持续看屏会按间隔将有变化的共享画面发送给 %1$s。遇到值得聊的新内容，桌宠会主动发到对话里。开启「启用语音」和「自动朗读回复」后也会说出来。</string>
     <style name="Theme.Bluefin.ScreenAwareness" parent="Theme.Bluefin">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

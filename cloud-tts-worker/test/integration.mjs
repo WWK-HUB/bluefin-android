@@ -77,7 +77,21 @@ async function mockUpstream(req) {
     if (model !== "s2.1-pro-free") {
       return jsonRes(400, { status: 400, message: "model header must be s2.1-pro-free" });
     }
-    if (mockState.mode !== "ok") {
+    if (mockState.mode === "held") {
+      let cancelled = false;
+      const stream = new ReadableStream({
+        start(controller) { controller.enqueue(AUDIO.subarray(0, 512)); },
+        async pull(controller) {
+          await sleep(50);
+          if (!cancelled) controller.enqueue(AUDIO.subarray(0, 512));
+        },
+        cancel() { cancelled = true; },
+      });
+      return new Response(stream, { headers: { "content-type": "audio/mpeg" } });
+    }
+    if (mockState.mode === "slow-headers") {
+      await sleep(500);
+    } else if (mockState.mode !== "ok") {
       const status = Number(mockState.mode);
       return jsonRes(status, { status, message: `mock ${status}` });
     }
@@ -120,6 +134,8 @@ const mf = new Miniflare({
   modules: true,
   scriptPath: path.join(ROOT, "dist-test/index.mjs"),
   compatibilityDate: "2025-09-01",
+  compatibilityFlags: ["enable_request_signal"],
+  unsafeDirectSockets: [{ host: "127.0.0.1" }],
   durableObjects: { GATE: { className: "Gate", useSQLite: true } },
   kvNamespaces: { VOICES: "voices" },
   bindings: {
@@ -305,20 +321,117 @@ try {
   check("revoked device is 403 AUTH_ERROR", revoked.status === 403 && revoked.data.category === "AUTH_ERROR");
 
   // Registration caps (REGISTER_PER_IP_DAILY=3 for ip 1.2.3.4; MAX_DEVICES=4 total)
-  const regD = await api("POST", "/v1/register", { body: { deviceId: crypto.randomUUID() }, ip: "9.9.9.9" });
-  check("fourth device registers (cap=4)", regD.status === 200, JSON.stringify(regD.data));
+  const regC2 = await api("POST", "/v1/register", { body: { deviceId: deviceC }, ip: "5.6.7.8" });
+  check("revocation still prevents registering the same device", regC2.status === 403);
+  const deviceD = crypto.randomUUID();
+  const regD = await api("POST", "/v1/register", { body: { deviceId: deviceD }, ip: "9.9.9.9" });
+  check("replacement device registers", regD.status === 200);
   const regE = await api("POST", "/v1/register", { body: { deviceId: crypto.randomUUID() }, ip: "8.8.8.8" });
-  check("registration beyond device cap rejected", regE.status === 503);
+  check("revoked device frees an active slot", regE.status === 200);
   const regF = await api("POST", "/v1/register", { body: { deviceId: crypto.randomUUID() }, ip: "1.2.3.4" });
-  check("per-IP registration cap enforced", regF.status === 429 || regF.status === 503);
+  check("registration beyond device cap rejected", regF.status === 503);
 
   // Voice delete removes the inline audio and mapping
+  const kv = await mf.getKVNamespace("VOICES");
+  check("revocation clears device recording copies", (await kv.list({ prefix: `audio:${deviceC}:` })).keys.length === 0);
   const tokenD = regD.data.token;
+  await api("POST", "/v1/voices/link", { token: tokenD, body: { voiceId: "another-link", fishModelId: MODEL_ID } });
+  const unlink = await api("DELETE", "/v1/voices/another-link", { token: tokenD });
+  check("deleting a link preserves the existing vendor model", unlink.data.deleted && mockState.models.has(MODEL_ID));
   const upD = await api("POST", "/v1/voices", { token: tokenD, body: { voiceId: "temp", audio: wav.toString("base64"), referenceText: "x" } });
   const del = await api("DELETE", "/v1/voices/temp", { token: tokenD });
   const listD = await api("GET", "/v1/voices", { token: tokenD });
   const afterDel = await api("POST", "/v1/tts", { token: tokenD, body: { text: "删除后。", voiceId: "temp" } });
   check("voice delete removes inline voice", upD.status === 200 && del.status === 200 && !listD.data.voices.some((v) => v.voiceId === "temp") && afterDel.status === 404);
+  check("delete removes the actual recording", (await kv.list({ prefix: `audio:${deviceD}:temp` })).keys.length === 0);
+  check("repeat delete is acknowledged", (await api("DELETE", "/v1/voices/temp", { token: tokenD })).data.deleted === true);
+
+  const upload = () => api("POST", "/v1/voices", { token: tokenD, body: { voiceId: "race", audio: wav.toString("base64"), referenceText: "x" } });
+  await Promise.all([upload(), api("DELETE", "/v1/voices/race", { token: tokenD }), upload()]);
+  const listed = await api("GET", "/v1/voices", { token: tokenD });
+  const live = listed.data.voices.some((voice) => voice.voiceId === "race");
+  check("concurrent delete and upload leave no orphan", (await kv.list({ prefix: `audio:${deviceD}:race` })).keys.length === Number(live));
+  const scopedUpload = (bindingId) => api("POST", "/v1/voices", {
+    token: tokenD, body: { voiceId: "scoped", bindingId, audio: wav.toString("base64"), referenceText: "x" },
+  });
+  const scopedDelete = (bindingId) => api("DELETE", "/v1/voices/scoped", { token: tokenD, body: { bindingId } });
+  const oldBinding = crypto.randomUUID();
+  const newBinding = crypto.randomUUID();
+  check("delete acknowledges a binding whose upload has not arrived", (await scopedDelete(oldBinding)).data.deleted === true);
+  check("late upload for a deleted binding is refused", (await scopedUpload(oldBinding)).status === 400);
+  check("replacement binding can upload", (await scopedUpload(newBinding)).status === 200);
+  await scopedDelete(oldBinding);
+  check("late deletion preserves the replacement binding",
+    (await kv.list({ prefix: `audio:${deviceD}:scoped` })).keys.length === 1);
+  const audit = await api("POST", "/admin/voice-maintenance", { admin: ADMIN, body: {} });
+  check("maintenance can report without deleting", audit.status === 200 && typeof audit.data.expired === "number");
+
+  // Keep the upstream open so aborting the HTTP client interrupts synthesis.
+  // Use the Worker socket directly so the Miniflare ingress proxy does not
+  // mask the incoming connection's abort signal.
+  const ttsUrl = new URL("/v1/tts", await mf.unsafeGetDirectURL());
+  const heldBody = { text: "字".repeat(120), voiceId: "timbre1" };
+  function requestTts(token, abort) {
+    return fetch(ttsUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(heldBody),
+      signal: abort.signal,
+    });
+  }
+  async function openStream(token, abort) {
+    const response = await requestTts(token, abort);
+    assert.equal(response.status, 200);
+    assert.equal((await response.body.getReader().read()).done, false);
+  }
+  async function waitForNoLeases() {
+    const deadline = Date.now() + 5_000;
+    do {
+      const devices = await api("GET", "/admin/devices", { admin: ADMIN });
+      if (devices.data.inFlight === 0) return true;
+      await sleep(25);
+    } while (Date.now() < deadline);
+    return false;
+  }
+  const first = new AbortController();
+  const second = new AbortController();
+  mockState.mode = "held";
+  try {
+    await openStream(tokenD, first);
+    const deviceBusy = await api("POST", "/v1/tts", { token: tokenD, body: heldBody });
+    check("active device gets its own busy response", deviceBusy.status === 429 &&
+      deviceBusy.data.error === "device_busy" && deviceBusy.data.category === "RATE_LIMITED");
+    await openStream(regE.data.token, second);
+    const globalBusy = await api("POST", "/v1/tts", { token: tokenB, body: heldBody });
+    check("global slot exhaustion still returns busy", globalBusy.status === 429 && globalBusy.data.error === "busy");
+  } finally {
+    first.abort();
+    second.abort();
+    mockState.mode = "ok";
+  }
+  check("disconnect releases both global leases before expiry", await waitForNoLeases());
+  const resumed = await api("POST", "/v1/tts", { token: tokenD, body: { ...heldBody, text: "继续朗读。" } });
+  check("cancelled synthesis frees the same device and incurs no character quota", resumed.status === 200);
+
+  // A stop can also arrive while the vendor is still preparing the response.
+  const earlyAbort = new AbortController();
+  mockState.mode = "slow-headers";
+  const requestsBefore = mockState.ttsRequests.length;
+  const waitingForAudio = requestTts(tokenD, earlyAbort);
+  try {
+    const deadline = Date.now() + 3_000;
+    while (mockState.ttsRequests.length === requestsBefore && Date.now() < deadline) await sleep(10);
+    assert.ok(mockState.ttsRequests.length > requestsBefore, "the cancelled request reached the vendor");
+    earlyAbort.abort();
+    await assert.rejects(waitingForAudio, { name: "AbortError" });
+    check("disconnect before upstream headers releases the lease", await waitForNoLeases());
+  } finally {
+    earlyAbort.abort();
+    mockState.mode = "ok";
+    await waitingForAudio.catch(() => {});
+  }
+  const afterEarlyAbort = await api("POST", "/v1/tts", { token: tokenD, body: { ...heldBody, text: "再次朗读。" } });
+  check("the same device can speak after cancelling before headers", afterEarlyAbort.status === 200);
 
   console.log(failures === 0 ? "\nALL INTEGRATION CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 } catch (error) {

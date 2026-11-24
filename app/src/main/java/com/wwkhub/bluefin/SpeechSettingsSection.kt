@@ -8,10 +8,13 @@ import android.widget.EditText
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.ViewCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.wwkhub.bluefin.voice.tts.CloudTtsConfig
+import android.content.SharedPreferences
+import com.wwkhub.bluefin.voice.tts.CloudVoiceDeletion
 import com.wwkhub.bluefin.voice.tts.EngineState
 import com.wwkhub.bluefin.voice.tts.LocalEngineVerifier
 import com.wwkhub.bluefin.voice.tts.OfflineTtsSpec
@@ -49,6 +52,9 @@ internal class SpeechSettingsSection(
     private val voiceAbout: TextView = section.findViewById(R.id.speech_voice_about)
     private val voicePick: MaterialButton = section.findViewById(R.id.speech_voice_pick)
     private val voiceImport: MaterialButton = section.findViewById(R.id.speech_voice_import)
+    private val voiceCreate: MaterialButton = section.findViewById(R.id.speech_voice_create)
+    private val voiceManage: MaterialButton = section.findViewById(R.id.speech_voice_manage)
+    private val deletionStatus: TextView = section.findViewById(R.id.speech_voice_deletion_status)
     private val voicePreview: MaterialButton = section.findViewById(R.id.speech_voice_preview)
     private val cacheStatus: TextView = section.findViewById(R.id.speech_cache_status)
     private val cacheClear: MaterialButton = section.findViewById(R.id.speech_cache_clear)
@@ -64,9 +70,13 @@ internal class SpeechSettingsSection(
     private var syncing = false
     private var offlineExpanded = false
     private val stateListener = { refresh() }
+    private val deletionListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key?.startsWith("pending:") == true) refreshDeletionStatus()
+    }
 
     init {
         manager.addListener(stateListener)
+        CloudVoiceDeletion.prefs(activity).registerOnSharedPreferenceChangeListener(deletionListener)
         toggle.setOnCheckedChangeListener { _, checked ->
             if (syncing) return@setOnCheckedChangeListener
             BluefinStore.writeSpeechOn(prefs, checked)
@@ -91,7 +101,11 @@ internal class SpeechSettingsSection(
         })
         voicePick.setOnClickListener { showVoicePicker() }
         voiceImport.setOnClickListener { activity.promptVoicePackImport { refresh() } }
+        voiceCreate.setOnClickListener { activity.openVoicePackCreator() }
+        voiceManage.setOnClickListener { showVoicePackManager() }
         voicePreview.setOnClickListener { previewVoice() }
+        bindDisclosure(R.id.speech_voice_actions_toggle, R.id.speech_voice_actions)
+        bindDisclosure(R.id.speech_service_options_toggle, R.id.speech_service_options)
         cacheClear.setOnClickListener {
             cache.clear()
             Toast.makeText(activity, R.string.speech_cache_cleared, Toast.LENGTH_SHORT).show()
@@ -113,12 +127,27 @@ internal class SpeechSettingsSection(
         refresh()
     }
 
-    /** Called when the settings sheet closes so the app-scoped manager lets go. */
+    private fun bindDisclosure(toggle: Int, panel: Int) {
+        val button = section.findViewById<MaterialButton>(toggle)
+        val content = section.findViewById<View>(panel)
+        fun setExpanded(expanded: Boolean) {
+            content.visibility = if (expanded) View.VISIBLE else View.GONE
+            ViewCompat.setStateDescription(button, activity.getString(
+                if (expanded) R.string.settings_expanded else R.string.settings_collapsed,
+            ))
+        }
+        button.setOnClickListener { setExpanded(content.visibility != View.VISIBLE) }
+        setExpanded(false)
+    }
+
+    /** Unregisters listeners when the settings surface closes. */
     fun dispose() {
         manager.removeListener(stateListener)
+        CloudVoiceDeletion.prefs(activity).unregisterOnSharedPreferenceChangeListener(deletionListener)
     }
 
     fun refresh() {
+        refreshDeletionStatus()
         val state = manager.currentState()
         val configured = CloudTtsConfig.isConfigured(activity)
         engineStatus.setText(
@@ -148,6 +177,7 @@ internal class SpeechSettingsSection(
             voicePick.isEnabled = true
             voicePreview.isEnabled = true
         }
+        voiceAbout.visibility = if (voiceAbout.text.isBlank()) View.GONE else View.VISIBLE
 
         cacheStatus.text = activity.getString(
             R.string.speech_cache_status,
@@ -182,6 +212,12 @@ internal class SpeechSettingsSection(
         )
     }
 
+    private fun refreshDeletionStatus() {
+        val count = CloudVoiceDeletion.pendingIds(activity).size
+        deletionStatus.visibility = if (count == 0) View.GONE else View.VISIBLE
+        deletionStatus.text = activity.getString(R.string.speech_voice_delete_pending_count, count)
+    }
+
     private fun currentPack(): VoicePack? {
         val id = VoicePackRepository.currentId(activity)
         return VoicePackRepository.find(activity, id)
@@ -189,12 +225,7 @@ internal class SpeechSettingsSection(
 
     private fun previewVoice() {
         val pack = currentPack() ?: return
-        if (!BluefinStore.readSpeechOn(prefs)) {
-            BluefinStore.writeSpeechOn(prefs, true)
-            activity.onSpeechPreferenceChanged()
-            refresh()
-        }
-        manager.speak(pack, activity.getString(R.string.speech_preview_text), TtsEmotion.NEUTRAL)
+        manager.speak(pack, activity.getString(R.string.speech_preview_text), TtsEmotion.NEUTRAL, preview = true)
     }
 
     private fun confirmLocalDelete() {
@@ -226,6 +257,7 @@ internal class SpeechSettingsSection(
                 val raw = input.text.toString().trim()
                 if (raw.isEmpty()) {
                     BluefinStore.writeCloudTtsBase(prefs, null)
+                    manager.onCloudAddressChanged()
                     refresh()
                     return@setPositiveButton
                 }
@@ -234,6 +266,7 @@ internal class SpeechSettingsSection(
                     Toast.makeText(activity, R.string.speech_cloud_edit_invalid, Toast.LENGTH_LONG).show()
                 } else {
                     BluefinStore.writeCloudTtsBase(prefs, normalized)
+                    manager.onCloudAddressChanged()
                     refresh()
                 }
             }
@@ -262,6 +295,57 @@ internal class SpeechSettingsSection(
                 activity.promptVoicePackImport { refresh() }
             }
             .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * Manage the packs this device created or imported. Built-ins are absent on
+     * purpose: they ship inside the APK and cannot be removed.
+     */
+    private fun showVoicePackManager() {
+        val packs = VoicePackRepository.listImported(activity)
+        if (packs.isEmpty()) {
+            Toast.makeText(activity, R.string.speech_voice_manage_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val current = VoicePackRepository.currentId(activity)
+        val labels = packs.map { pack ->
+            if (pack.id == current) "${pack.name}（当前）" else pack.name
+        }.toTypedArray()
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.speech_voice_manage)
+            .setItems(labels) { _, which ->
+                val pack = packs.getOrNull(which) ?: return@setItems
+                confirmDeletePack(pack)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmDeletePack(pack: VoicePack) {
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.speech_voice_delete_title)
+            .setMessage(activity.getString(R.string.speech_voice_delete_message, pack.name))
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.speech_voice_delete_confirm) { _, _ ->
+                manager.stop()
+                if (!CloudVoiceDeletion.request(activity, pack.id)) {
+                    Toast.makeText(activity, R.string.speech_voice_delete_failed, Toast.LENGTH_LONG)
+                        .show()
+                    return@setPositiveButton
+                }
+                activity.onVoicePackChanged()
+                Toast.makeText(
+                    activity,
+                    if (CloudVoiceDeletion.isPending(activity, pack.id)) {
+                        activity.getString(R.string.speech_voice_delete_pending)
+                    } else {
+                        activity.getString(R.string.speech_voice_deleted, pack.name)
+                    },
+                    Toast.LENGTH_SHORT,
+                ).show()
+                refresh()
+            }
             .show()
     }
 }

@@ -364,13 +364,14 @@ class BubblePreviewIsolationContractTest {
         val store = source("src/main/java/com/wwkhub/bluefin/BluefinStore.kt")
         assertTrue(store.contains("KEY_BUBBLE_PREVIEW = \"bubble_preview\""))
         assertTrue(store.contains("prefs.getBoolean(KEY_BUBBLE_PREVIEW, true)"))
-        val layout = source("src/main/res/layout/sheet_settings.xml")
+        val layout = source("src/main/res/layout/page_overlay_settings.xml")
         assertEquals(
             1,
             Regex("android:id=\"@\\+id/bubble_preview_switch\"").findAll(layout).count(),
         )
         assertTrue(layout.contains("@string/bubble_preview"))
-        assertTrue(layout.contains("@string/bubble_preview_help"))
+        val navigation = source("src/main/java/com/wwkhub/bluefin/SettingsPanel.kt")
+        assertTrue(navigation.contains("R.string.bubble_preview_help"))
         val strings = source("src/main/res/values/strings.xml")
         assertTrue(strings.contains(">对话气泡<"))
         assertTrue(strings.contains("开启宠物点击穿透时，可在「记录」里继续。"))

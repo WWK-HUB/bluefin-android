@@ -37,12 +37,23 @@ internal class TtsReader private constructor(context: Context) {
             }
         }
 
-        fun readCompletedReply(context: Context, text: String, emotion: TtsEmotion = TtsEmotion.NEUTRAL) {
+        fun readCompletedReply(
+            context: Context,
+            text: String,
+            emotion: TtsEmotion = TtsEmotion.NEUTRAL,
+            screenObservationOwner: Any? = null,
+        ) {
             val prefs = context.getSharedPreferences(BluefinStore.PREFS, Context.MODE_PRIVATE)
             if (!BluefinStore.readSpeechOn(prefs) || !BluefinStore.readAutoSpeech(prefs)) return
             if (!TtsText.hasSpeakableText(text)) return
             val pack = VoicePackRepository.find(context, VoicePackRepository.currentId(context)) ?: return
-            TtsProviderManager.shared(context).speak(pack, text, emotion)
+            val reader = shared(context)
+            if (screenObservationOwner != null && reader.isSpeaking()) return
+            reader.manager.speak(pack, text, emotion, screenObservationOwner = screenObservationOwner)
+        }
+
+        fun stopScreenReading(owner: Any) {
+            TtsProviderManager.peek()?.stopScreenReading(owner)
         }
 
         fun peek(): TtsReader? = instance

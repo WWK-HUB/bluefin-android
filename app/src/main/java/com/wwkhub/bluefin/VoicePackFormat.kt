@@ -12,6 +12,7 @@ package com.wwkhub.bluefin
  * Nothing here touches Android, so the whole matrix runs as a JVM unit test.
  */
 internal enum class VoicePackReject {
+    DELETION_PENDING,
     BAD_JSON,
     INCOMPLETE,
     INCOMPATIBLE,

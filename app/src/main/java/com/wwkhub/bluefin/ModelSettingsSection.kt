@@ -7,8 +7,8 @@ import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
@@ -22,10 +22,7 @@ internal class ModelSettingsSection(
     private val root: View,
     private val onOpenChat: () -> Unit,
 ) {
-    private val provider: MaterialAutoCompleteTextView = root.findViewById(R.id.model_provider)
-    private val regionGroup: MaterialButtonToggleGroup = root.findViewById(R.id.model_region_group)
-    private val regionMainland: MaterialButton = root.findViewById(R.id.model_region_mainland)
-    private val regionIntl: MaterialButton = root.findViewById(R.id.model_region_intl)
+    private val format: MaterialAutoCompleteTextView = root.findViewById(R.id.model_format)
     private val url: TextInputEditText = root.findViewById(R.id.model_url)
     private val model: TextInputEditText = root.findViewById(R.id.model_name)
     private val key: TextInputEditText = root.findViewById(R.id.model_key)
@@ -42,35 +39,19 @@ internal class ModelSettingsSection(
     private val save: MaterialButton = root.findViewById(R.id.model_save)
     private val goChat: MaterialButton = root.findViewById(R.id.model_go_chat)
 
-    private var currentProviderId = ModelCatalog.DEFAULT_PROVIDER_ID
-    private var currentRegion = ModelCatalog.Region.MAINLAND
-    private var syncing = false
     private var keyVisible = false
     private var testing = false
+    private var formRevision = 0L
 
     init {
         val adapter = ArrayAdapter(
             activity,
             android.R.layout.simple_list_item_1,
-            ModelCatalog.all.map { it.label },
+            ModelApiFormat.entries.map { activity.getString(it.label) },
         )
-        provider.setAdapter(adapter)
-        provider.inputType = android.text.InputType.TYPE_NULL
-        provider.setOnClickListener { provider.showDropDown() }
-        provider.setOnItemClickListener { _, _, position, _ ->
-            if (syncing) return@setOnItemClickListener
-            val next = ModelCatalog.all.getOrNull(position) ?: return@setOnItemClickListener
-            switchProvider(next)
-        }
-        regionGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (syncing || !isChecked) return@addOnButtonCheckedListener
-            val next = if (checkedId == R.id.model_region_intl) {
-                ModelCatalog.Region.INTERNATIONAL
-            } else {
-                ModelCatalog.Region.MAINLAND
-            }
-            switchRegion(next)
-        }
+        format.setAdapter(adapter)
+        format.inputType = android.text.InputType.TYPE_NULL
+        format.setOnClickListener { format.showDropDown() }
         keyToggle.setOnClickListener { toggleKeyVisibility() }
         keyClear.setOnClickListener { confirmClearKey() }
         advancedToggle.setOnClickListener {
@@ -79,79 +60,27 @@ internal class ModelSettingsSection(
         }
         test.setOnClickListener { runTest() }
         save.setOnClickListener { saveSettings() }
-        goChat.setOnClickListener { onOpenChat() }
+        goChat.setOnClickListener { saveSettings(openChat = true) }
         populate(ModelEndpointStore.load(activity))
+        listOf(format, url, model, key, temperature, maxTokens, headers).forEach { field ->
+            field.doAfterTextChanged { invalidateTestResult() }
+        }
+    }
+
+    private fun invalidateTestResult() {
+        formRevision += 1
+        testStatus.text = ""
     }
 
     private fun populate(endpoint: ModelEndpoint) {
-        syncing = true
-        currentProviderId = endpoint.providerId
-        currentRegion = endpoint.region
-        provider.setText(endpoint.provider.label, false)
+        format.setText(activity.getString(endpoint.format.label), false)
         url.setText(endpoint.url)
         model.setText(endpoint.model)
-        model.hint = endpoint.modelHint
         temperature.setText(endpoint.temperature?.toString().orEmpty())
         maxTokens.setText(endpoint.maxOutputTokens.toString())
         headers.setText(endpoint.extraHeaders)
         key.setText("")
-        key.hint = activity.getString(R.string.model_key_keep)
-        regionGroup.visibility = if (endpoint.provider.hasRegionChoice) View.VISIBLE else View.GONE
-        regionGroup.check(
-            if (endpoint.region == ModelCatalog.Region.INTERNATIONAL) {
-                R.id.model_region_intl
-            } else {
-                R.id.model_region_mainland
-            },
-        )
-        syncing = false
         refreshKeyState()
-    }
-
-    private fun switchProvider(next: ModelProvider) {
-        if (next.id == currentProviderId) return
-        val previousId = currentProviderId
-        val previousRegion = currentRegion
-        val result = ModelCatalog.switchPrefill(
-            currentUrl = url.text?.toString().orEmpty(),
-            currentModel = model.text?.toString().orEmpty(),
-            previousProviderId = previousId,
-            previousRegion = previousRegion,
-            nextProviderId = next.id,
-            nextRegion = previousRegion,
-        )
-        syncing = true
-        currentProviderId = next.id
-        currentRegion = ModelCatalog.regionFor(next.id, previousRegion)
-        provider.setText(next.label, false)
-        url.setText(result.url)
-        model.setText(result.model)
-        model.hint = next.modelHint
-        regionGroup.visibility = if (next.hasRegionChoice) View.VISIBLE else View.GONE
-        regionGroup.check(
-            if (currentRegion == ModelCatalog.Region.INTERNATIONAL) {
-                R.id.model_region_intl
-            } else {
-                R.id.model_region_mainland
-            },
-        )
-        syncing = false
-        Toast.makeText(activity, R.string.model_confirm_key, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun switchRegion(nextRegion: ModelCatalog.Region) {
-        if (nextRegion == currentRegion) return
-        val result = ModelCatalog.switchPrefill(
-            currentUrl = url.text?.toString().orEmpty(),
-            currentModel = model.text?.toString().orEmpty(),
-            previousProviderId = currentProviderId,
-            previousRegion = currentRegion,
-            nextProviderId = currentProviderId,
-            nextRegion = nextRegion,
-        )
-        currentRegion = nextRegion
-        url.setText(result.url)
-        if (model.text.isNullOrBlank()) model.setText(result.model)
     }
 
     private fun toggleKeyVisibility() {
@@ -183,49 +112,75 @@ internal class ModelSettingsSection(
                 }
                 key.setText("")
                 refreshKeyState()
-                testStatus.text = ""
+                invalidateTestResult()
                 OverlayLauncher.sync(activity)
             }
             .show()
     }
 
-    private fun saveSettings() {
-        val endpoint = readForm(requireConnection = false) ?: return
-        val typedKey = key.text?.toString().orEmpty()
-        if (typedKey.isNotBlank() && !ApiKeyVault.save(activity, typedKey)) {
+    private fun saveSettings(openChat: Boolean = false) {
+        val endpoint = readForm() ?: return
+        val typedKey = key.text?.toString().orEmpty().trim()
+        if (!canUseCredentials(endpoint, typedKey)) return
+        if (openChat && typedKey.isEmpty() && savedKey().isNullOrBlank()) {
+            testStatus.setText(R.string.model_key_required)
+            return
+        }
+        if (!ApiKeyVault.saveConfiguration(activity, endpoint, typedKey)) {
             testStatus.text = "无法安全保存 API Key，请重试。"
             return
         }
-        ModelEndpointStore.save(activity, endpoint)
-        if (typedKey.isNotBlank()) key.setText("")
+        if (typedKey.isNotEmpty()) key.setText("")
         refreshKeyState()
-        testStatus.text = ""
+        invalidateTestResult()
         OverlayLauncher.sync(activity)
-        Toast.makeText(activity, R.string.model_saved, Toast.LENGTH_SHORT).show()
+        if (openChat) onOpenChat()
+        else Toast.makeText(activity, R.string.model_saved, Toast.LENGTH_SHORT).show()
     }
 
-    private fun readForm(requireConnection: Boolean): ModelEndpoint? {
+    private fun canUseCredentials(endpoint: ModelEndpoint, typedKey: String): Boolean {
+        val saved = ModelEndpointStore.load(activity)
+        if (EndpointAddressPolicy.sameOrigin(saved.url, endpoint.url)) return true
+        if (typedKey.isEmpty() && ModelEndpointStore.hasSavedKey(activity)) {
+            testStatus.setText(R.string.model_key_for_new_address)
+            return false
+        }
+        if (saved.extraHeaders.isNotBlank() && endpoint.extraHeaders.trim() == saved.extraHeaders.trim()) {
+            testStatus.setText(R.string.model_headers_for_new_address)
+            return false
+        }
+        return true
+    }
+
+    private fun savedKey(): String? = ApiKeyVault.readForEndpoint(activity, ModelEndpointStore.load(activity))
+
+    private fun readForm(): ModelEndpoint? {
+        val label = format.text.toString()
+        val currentFormat = ModelApiFormat.entries.firstOrNull { activity.getString(it.label) == label }
+        if (currentFormat == null) {
+            testStatus.setText(R.string.model_format_required)
+            return null
+        }
         val rawUrl = url.text?.toString().orEmpty().trim()
-        if (rawUrl.isNotEmpty() || requireConnection) {
-            val check = EndpointAddressPolicy.check(rawUrl)
-            if (check is EndpointAddressPolicy.Check.Invalid) {
-                testStatus.text = check.reason
-                return null
-            }
+        val check = EndpointAddressPolicy.checkChatAddress(rawUrl, currentFormat)
+        if (check is EndpointAddressPolicy.Check.Invalid) {
+            testStatus.text = check.reason
+            return null
         }
         val modelName = model.text?.toString().orEmpty().trim()
-        if (requireConnection && modelName.isEmpty()) {
+        if (modelName.isEmpty()) {
             testStatus.text = "请填写模型名。"
             return null
         }
         val rawTemperature = temperature.text?.toString().orEmpty().trim()
+        val temperatureLimit = if (currentFormat == ModelApiFormat.ANTHROPIC) 1 else 2
         val parsedTemperature = if (rawTemperature.isEmpty()) {
             null
         } else {
-            rawTemperature.toDoubleOrNull()?.takeIf { it in 0.0..2.0 }
+            rawTemperature.toDoubleOrNull()?.takeIf { it >= 0.0 && it <= temperatureLimit }
         }
         if (rawTemperature.isNotEmpty() && parsedTemperature == null) {
-            testStatus.text = "温度需在 0 到 2 之间。"
+            testStatus.text = activity.getString(R.string.model_temperature_range, temperatureLimit)
             return null
         }
         val rawTokens = maxTokens.text?.toString().orEmpty().trim()
@@ -235,13 +190,12 @@ internal class ModelSettingsSection(
             return null
         }
         val rawHeaders = headers.text?.toString().orEmpty()
-        if (!headersValid(rawHeaders)) {
-            testStatus.text = "附加请求头需为每行「名称: 值」。"
+        if (invalidModelHeaders(rawHeaders)) {
+            testStatus.text = ChatFailureText.INVALID_HEADERS
             return null
         }
         return ModelEndpoint(
-            providerId = currentProviderId,
-            region = currentRegion,
+            format = currentFormat,
             url = rawUrl,
             model = modelName,
             temperature = parsedTemperature,
@@ -250,51 +204,36 @@ internal class ModelSettingsSection(
         )
     }
 
-    private fun headersValid(raw: String): Boolean {
-        return raw.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .all { line ->
-                val index = line.indexOf(':')
-                index > 0 && HEADER_NAME.matches(line.substring(0, index).trim()) &&
-                    line.substring(index + 1).trim().isNotEmpty()
-            }
-    }
-
     private fun runTest() {
         if (testing) return
-        val endpoint = readForm(requireConnection = true) ?: return
+        val endpoint = readForm() ?: return
         val typedKey = key.text?.toString().orEmpty().trim()
-        val apiKey = if (typedKey.isNotBlank()) typedKey else ApiKeyVault.read(activity)
+        if (!canUseCredentials(endpoint, typedKey)) return
+        val apiKey = typedKey.ifBlank { savedKey().orEmpty() }
         if (apiKey.isNullOrBlank()) {
-            testStatus.text = "请先填写 API Key。"
+            testStatus.setText(R.string.model_key_required)
             return
         }
         testing = true
+        val testedRevision = formRevision
         test.isEnabled = false
         testStatus.setText(R.string.model_testing)
         Thread({
             val message = try {
-                val elapsed = ChatCompletionsClient().test(endpoint, apiKey)
-                activity.getString(R.string.model_connected) + "（${elapsed} ms）"
-            } catch (error: ChatHttpStatusException) {
-                ChatFailureText.forStatus(error.status)
-            } catch (_: InvalidChatTestResponse) {
-                "服务未返回有效的模型回复，请检查 API 地址和模型名。"
-            } catch (_: ChatServiceException) {
-                ChatFailureText.forServiceFailure()
+                val result = ChatCompletionsClient().test(endpoint, apiKey)
+                if (result.outputLimitReached) {
+                    activity.getString(R.string.model_connected_output_limit)
+                } else {
+                    activity.getString(R.string.model_connected, result.elapsedMillis)
+                }
             } catch (error: Exception) {
                 ChatFailureText.forThrowable(error)
             }
             root.post {
                 testing = false
                 test.isEnabled = true
-                testStatus.text = message
+                if (formRevision == testedRevision) testStatus.text = message
             }
         }, "bluefin-model-test").apply { isDaemon = true }.start()
-    }
-
-    private companion object {
-        val HEADER_NAME = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
     }
 }

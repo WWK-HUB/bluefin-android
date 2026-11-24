@@ -22,7 +22,7 @@ import { BUILTIN_VOICES } from "./builtin-voices.ts";
 import { ERRORS, errorResponse, json } from "./errors.ts";
 import type { SafeError } from "./errors.ts";
 import { fishCreateModel, fishDeleteModel, fishGetModel, fishTts } from "./fish.ts";
-import { Gate } from "./gate.ts";
+import { Gate, TTS_LEASE_MS } from "./gate.ts";
 
 export { Gate };
 
@@ -64,7 +64,7 @@ function deviceError(result: GateResult): Response {
     case "unknown_device":
       return errorResponse(ERRORS.unauthorized);
     case "device_busy":
-      return errorResponse(ERRORS.busy, 1);
+      return errorResponse(ERRORS.deviceBusy, 1);
     case "rate_limited":
       return errorResponse(ERRORS.rateLimited, Number(result.retryAfterSeconds ?? 5));
     case "quota_exceeded":
@@ -79,6 +79,8 @@ function deviceError(result: GateResult): Response {
       return errorResponse(ERRORS.voiceCapReached);
     case "voice_not_found":
       return errorResponse(ERRORS.voiceNotFound);
+    case "voice_removed":
+      return errorResponse(ERRORS.voiceInvalid);
     default:
       return errorResponse(ERRORS.upstreamError);
   }
@@ -118,23 +120,14 @@ type ResolvedVoice =
   | { kind: "persistent"; referenceId: string }
   | { kind: "inline"; audioB64: string; text: string };
 
-const audioCache = new Map<string, string>();
-
 async function resolveVoiceForTts(env: Env, voiceId: string, deviceId: string): Promise<ResolvedVoice | null> {
   const mapping = await gate(env, "registry", "/voice/resolve", { voiceId, deviceId });
   if (mapping.ok) {
     if (mapping.state !== "trained") return null;
     const fishModelId = String(mapping.fishModelId ?? "");
     if (fishModelId) return { kind: "persistent", referenceId: fishModelId };
-    const key = `audio:${deviceId}:${voiceId}`;
-    let audio = audioCache.get(key);
-    if (!audio) {
-      audio = (await env.VOICES.get(key, "text")) ?? undefined;
-      if (audio) {
-        if (audioCache.size > 32) audioCache.clear();
-        audioCache.set(key, audio);
-      }
-    }
+    const key = String(mapping.audioKey ?? `audio:${deviceId}:${voiceId}`);
+    const audio = await env.VOICES.get(key, "text");
     if (!audio) return null;
     return { kind: "inline", audioB64: audio, text: String(mapping.referenceText ?? "") };
   }
@@ -194,6 +187,67 @@ async function handleRefresh(request: Request, env: Env): Promise<Response> {
   return json({ token, expiresAt });
 }
 
+function streamAudio(
+  body: ReadableStream<Uint8Array>,
+  timeoutMs: number,
+  signal: AbortSignal,
+  finish: (success: boolean) => Promise<void>,
+  ctx: ExecutionContext,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let resolveOutcome!: (success: boolean) => void;
+  const outcome = new Promise<boolean>((resolve) => { resolveOutcome = resolve; });
+  const completion = outcome.then(finish);
+  // Keep cleanup registered while the response is streaming so disconnects
+  // can settle the lease even when they end the request.
+  ctx.waitUntil(completion);
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout>;
+  let onAbort: () => void;
+  const settle = (success: boolean) => {
+    if (!settled) {
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolveOutcome(success);
+    }
+    return completion;
+  };
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const stop = (error: Error) => {
+        if (settled) return;
+        controller.error(error);
+        void reader.cancel(error).catch(() => {});
+        void settle(false);
+      };
+      onAbort = () => stop(new Error("TTS client disconnected"));
+      timer = setTimeout(() => stop(new Error("TTS stream timed out")), timeoutMs);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (settled) return;
+        if (!done) {
+          controller.enqueue(value);
+          return;
+        }
+        await settle(true);
+        controller.close();
+      } catch (error) {
+        if (settled) return;
+        controller.error(error);
+        await settle(false);
+      }
+    },
+    async cancel(reason) {
+      await Promise.all([reader.cancel(reason).catch(() => {}), settle(false)]);
+    },
+  });
+}
+
 async function handleTts(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const started = Date.now();
   const claims = await requireDevice(request, env);
@@ -224,59 +278,74 @@ async function handleTts(request: Request, env: Env, ctx: ExecutionContext): Pro
   const acquired = await gate(env, "registry", "/acquire", { deviceId });
   if (!acquired.ok) return deviceError(acquired);
   const leaseId = String(acquired.leaseId ?? "");
+  const expires = Number(acquired.expires ?? (Date.now() + TTS_LEASE_MS));
+  const deviceGate = `device:${deviceId}`;
 
-  const checked = await gate(env, `device:${deviceId}`, "/check", {});
-  if (!checked.ok) {
-    await gate(env, "registry", "/release", { leaseId });
-    return deviceError(checked);
-  }
-
-  const finish = (success: boolean) => {
-    ctx.waitUntil(
-      Promise.all([
-        gate(env, `device:${deviceId}`, "/commit", { chars, success }),
-        gate(env, "registry", "/release", { leaseId }),
-      ]).catch(() => {}),
-    );
+  const deviceCheck = gate(env, deviceGate, "/check", { leaseId, expires });
+  const releaseLeases = async (success: boolean) => {
+    // A lost /check reply may still have stored the lease. Wait for admission
+    // to settle, then let the Durable Object match the owner on cleanup.
+    const checked = await deviceCheck.catch(() => undefined);
+    const release = gate(env, "registry", "/release", { leaseId });
+    const deviceLeaseMayBeHeld = !checked || checked.ok || checked.error === "internal";
+    const commit = deviceLeaseMayBeHeld ? gate(env, deviceGate, "/commit", { leaseId, chars, success }) : undefined;
+    await Promise.allSettled([release, commit]);
   };
+  let cleanup: Promise<void> | undefined;
+  const finish = (success: boolean) => cleanup ??= releaseLeases(success);
+  const onAbort = () => ctx.waitUntil(finish(false));
+  request.signal.addEventListener("abort", onAbort, { once: true });
 
-  const upstream = await fishTts(
-    env,
-    {
-      text: composeText(text, emotion),
-      speed,
-      ...(voice.kind === "persistent"
-        ? { referenceId: voice.referenceId }
-        : { references: [{ audio: voice.audioB64, text: voice.text }] }),
-    },
-    cfg.upstreamTimeoutMs,
-  );
-  if (!upstream.ok || !upstream.body) {
-    finish(false);
-    log("tts", upstream.status, devHash, started);
-    return errorResponse(upstreamFailure(upstream.failure), upstream.failure === "rate" ? 2 : undefined);
+  let streaming = false;
+  try {
+    const checked = await deviceCheck;
+    if (!checked.ok) return deviceError(checked);
+    if (request.signal.aborted) return errorResponse(ERRORS.upstreamTimeout);
+
+    const remainingMs = expires - Date.now();
+    if (remainingMs <= 0) return errorResponse(ERRORS.upstreamTimeout);
+    const upstream = await fishTts(
+      env,
+      {
+        text: composeText(text, emotion),
+        speed,
+        ...(voice.kind === "persistent"
+          ? { referenceId: voice.referenceId }
+          : { references: [{ audio: voice.audioB64, text: voice.text }] }),
+      },
+      Math.min(cfg.upstreamTimeoutMs, remainingMs),
+      request.signal,
+    );
+    if (!upstream.ok || !upstream.body) {
+      log("tts", upstream.status, devHash, started);
+      return errorResponse(upstreamFailure(upstream.failure), upstream.failure === "rate" ? 2 : undefined);
+    }
+
+    const streamTimeoutMs = Math.min(90_000, expires - Date.now());
+    if (streamTimeoutMs <= 0) {
+      await upstream.body.cancel().catch(() => {});
+      return errorResponse(ERRORS.upstreamTimeout);
+    }
+
+    const audio = streamAudio(upstream.body, streamTimeoutMs, request.signal, finish, ctx);
+    streaming = true;
+    log("tts", 200, devHash, started);
+    return new Response(audio, {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Cache-Control": "no-store",
+        "X-Tts-Model": FISH_MODEL,
+      },
+    });
+  } finally {
+    request.signal.removeEventListener("abort", onAbort);
+    if (!streaming) {
+      const completion = finish(false);
+      ctx.waitUntil(completion);
+      await completion;
+    }
   }
-
-  // Stream the audio through untouched. Completion (or client disconnect /
-  // upstream failure) releases the concurrency lease and commits quota only
-  // for successful synthesis.
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const guard = setTimeout(() => upstream.body?.cancel().catch(() => {}), 90_000);
-  upstream.body
-    .pipeTo(writable)
-    .then(() => finish(true))
-    .catch(() => finish(false))
-    .finally(() => clearTimeout(guard));
-
-  log("tts", 200, devHash, started);
-  return new Response(readable, {
-    status: 200,
-    headers: {
-      "Content-Type": "audio/mpeg",
-      "Cache-Control": "no-store",
-      "X-Tts-Model": FISH_MODEL,
-    },
-  });
 }
 
 /**
@@ -342,9 +411,10 @@ async function handleVoiceUpload(request: Request, env: Env): Promise<Response> 
     name,
     state: "trained",
     referenceText,
+    audio: audioB64,
+    bindingId: body.bindingId,
   });
   if (!stored.ok) return deviceError(stored);
-  await env.VOICES.put(`audio:${claims.deviceId}:${voiceId}`, audioB64);
   return json({ voiceId, state: "trained", ready: true });
 }
 
@@ -373,6 +443,7 @@ async function handleVoiceLink(request: Request, env: Env): Promise<Response> {
     fishModelId,
     name: typeof body.name === "string" ? body.name.slice(0, 40) : voiceId,
     state: model.state,
+    bindingId: body.bindingId,
   });
   if (!stored.ok) return deviceError(stored);
   return json({ voiceId, state: model.state, ready: model.state === "trained" });
@@ -398,19 +469,15 @@ async function handleVoiceDelete(request: Request, env: Env, voiceId: string): P
   const claims = await requireDevice(request, env);
   if (claims instanceof Response) return claims;
   if (!VOICE_ID_RE.test(voiceId)) return errorResponse(ERRORS.badRequest);
+  const body = request.body === null ? {} : await readJson(request, 1024);
+  if (!body) return errorResponse(ERRORS.badRequest);
   const deleted = await gate(env, "registry", "/voice/delete", {
     scope: "device",
     deviceId: claims.deviceId,
     voiceId,
+    bindingId: body.bindingId,
   });
   if (!deleted.ok) return deviceError(deleted);
-  const fishModelId = String(deleted.fishModelId ?? "");
-  if (fishModelId && env.FISH_API_KEY) {
-    await fishDeleteModel(env, fishModelId, limits(env).upstreamTimeoutMs);
-  } else {
-    await env.VOICES.delete(`audio:${claims.deviceId}:${voiceId}`);
-    audioCache.delete(`audio:${claims.deviceId}:${voiceId}`);
-  }
   return json({ deleted: true });
 }
 
@@ -463,6 +530,12 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
       model: FISH_MODEL,
       fishProbe,
     });
+  }
+  if (request.method === "POST" && url.pathname === "/admin/voice-maintenance") {
+    const body = await readJson(request, 4096);
+    if (!body) return errorResponse(ERRORS.badRequest);
+    const cursor = typeof body.cursor === "string" ? body.cursor : undefined;
+    return json(await runVoiceMaintenance(env, body.remove === true && env.VOICE_RETENTION_ENABLED === "true", cursor));
   }
   if (request.method === "GET" && url.pathname === "/admin/devices") {
     const result = await gate(env, "registry", "/devices", {});
@@ -580,9 +653,45 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   return errorResponse(ERRORS.notFound);
 }
 
+// ---- retention -------------------------------------------------------------
+
+async function runVoiceMaintenance(env: Env, remove: boolean, cursor?: string, retire = cursor === undefined) {
+  const result = await gate(env, "registry", "/maintenance/candidates", {});
+  if (!result.ok) throw new Error("retention candidates unavailable");
+  const expired = Array.isArray(result.expired) ? result.expired.map(String) : [];
+  let retired = 0;
+  let failed = 0;
+  if (remove && retire) {
+    for (const deviceId of expired.slice(0, 8)) {
+      const reply = await gate(env, "registry", "/maintenance/device", { deviceId });
+      if (!reply.ok) failed++;
+      else if (reply.retired) retired++;
+    }
+  }
+  let orphan = 0;
+  let unclassified = 0;
+  const page = await env.VOICES.list({ prefix: "audio:", limit: 32, cursor });
+  for (const item of page.keys) {
+    const reply = await gate(env, "registry", "/maintenance/orphan", { key: item.name, remove });
+    if (!reply.ok) failed++;
+    else if (reply.orphan) orphan++;
+    else if (reply.unclassified) unclassified++;
+  }
+  return { expired: expired.length, retired, orphan, unclassified, failed, cursor: page.list_complete ? null : page.cursor };
+}
+
 // ---- entry ----------------------------------------------------------------
 
 export default {
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    const enabled = env.VOICE_RETENTION_ENABLED === "true";
+    const cursorKey = "maintenance:audio-cursor";
+    const cursor = await env.VOICES.get(cursorKey) ?? undefined;
+    const result = await runVoiceMaintenance(env, enabled, cursor, true);
+    if (result.cursor) await env.VOICES.put(cursorKey, result.cursor);
+    else await env.VOICES.delete(cursorKey);
+    console.log(JSON.stringify({ route: "voice_maintenance", dryRun: !enabled, ...result, cursor: undefined }));
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     try {

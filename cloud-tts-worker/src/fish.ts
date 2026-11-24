@@ -60,7 +60,9 @@ function classify(status: number): UpstreamResult["failure"] {
   return "server";
 }
 
-export async function fishTts(env: Env, params: TtsParams, timeoutMs: number): Promise<UpstreamResult> {
+export async function fishTts(
+  env: Env, params: TtsParams, timeoutMs: number, signal?: AbortSignal,
+): Promise<UpstreamResult> {
   const payload: Record<string, unknown> = {
     text: params.text,
     format: "mp3",
@@ -90,7 +92,7 @@ export async function fishTts(env: Env, params: TtsParams, timeoutMs: number): P
         model: FISH_MODEL,
       },
       body: inline ? msgpackEncode(payload) : JSON.stringify(payload),
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
     });
     if (!response.ok) {
       let reason = "";

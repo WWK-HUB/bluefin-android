@@ -17,16 +17,36 @@ internal object ApiKeyVault {
     private const val FILE = "bluefin_key_vault"
     private const val LEGACY_FILE = "bluefin_key_fallback"
     private const val KEY_SECRET = "api_key"
+    private const val KEY_ORIGIN = "api_origin"
 
     @Volatile
     private var cached: SharedPreferences? = null
 
     @Synchronized
-    fun save(context: Context, key: String): Boolean {
+    fun saveConfiguration(context: Context, endpoint: ModelEndpoint, typedKey: String): Boolean {
+        if (typedKey.isNotEmpty() && !save(context, typedKey, endpoint.url)) return false
+        ModelEndpointStore.save(context, endpoint)
+        return true
+    }
+
+    @Synchronized
+    fun readForEndpoint(context: Context, endpoint: ModelEndpoint): String? {
+        if (ModelEndpointStore.load(context) != endpoint) return null
+        val key = read(context) ?: return null
+        val origin = runCatching { secure(context)?.getString(KEY_ORIGIN, null) }.getOrElse { return null }
+        return key.takeIf { origin == null || origin == EndpointAddressPolicy.origin(endpoint.url) }
+    }
+
+    @Synchronized
+    fun save(context: Context, key: String, url: String = ModelEndpointStore.load(context).url): Boolean {
         val trimmed = key.trim()
         if (trimmed.isEmpty()) return false
         val prefs = secure(context) ?: return false
-        if (!runCatching { prefs.edit().putString(KEY_SECRET, trimmed).commit() }.getOrDefault(false)) return false
+        if (!runCatching {
+                prefs.edit().putString(KEY_SECRET, trimmed)
+                    .putString(KEY_ORIGIN, EndpointAddressPolicy.origin(url)).commit()
+            }.getOrDefault(false)
+        ) return false
         legacy(context).edit().remove(KEY_SECRET).apply()
         ModelEndpointStore.markKeySaved(context, true)
         return true
@@ -38,6 +58,7 @@ internal object ApiKeyVault {
         val old = legacy(context).getString(KEY_SECRET, null)?.takeIf { it.isNotBlank() }
         if (!encrypted.isNullOrBlank()) {
             if (old != null) legacy(context).edit().remove(KEY_SECRET).apply()
+            if (!ModelEndpointStore.hasSavedKey(context)) ModelEndpointStore.markKeySaved(context, true)
             return encrypted
         }
         return old?.takeIf { save(context, it) }

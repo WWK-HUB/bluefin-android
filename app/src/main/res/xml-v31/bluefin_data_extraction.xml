@@ -4,10 +4,22 @@
         <exclude domain="sharedpref" path="bluefin_key_vault.xml" />
         <exclude domain="sharedpref" path="bluefin_key_fallback.xml" />
         <exclude domain="sharedpref" path="bluefin_model_endpoint.xml" />
+        <exclude domain="sharedpref" path="bluefin_cloud_identity.xml" />
+        <exclude domain="sharedpref" path="bluefin_cloud_voice.xml" />
+        <exclude domain="file" path="voice-packs" />
+        <exclude domain="database" path="androidx.work.workdb" />
+        <exclude domain="database" path="androidx.work.workdb-wal" />
+        <exclude domain="database" path="androidx.work.workdb-shm" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="bluefin_key_vault.xml" />
         <exclude domain="sharedpref" path="bluefin_key_fallback.xml" />
         <exclude domain="sharedpref" path="bluefin_model_endpoint.xml" />
+        <exclude domain="sharedpref" path="bluefin_cloud_identity.xml" />
+        <exclude domain="sharedpref" path="bluefin_cloud_voice.xml" />
+        <exclude domain="file" path="voice-packs" />
+        <exclude domain="database" path="androidx.work.workdb" />
+        <exclude domain="database" path="androidx.work.workdb-wal" />
+        <exclude domain="database" path="androidx.work.workdb-shm" />
     </device-transfer>
 </data-extraction-rules>

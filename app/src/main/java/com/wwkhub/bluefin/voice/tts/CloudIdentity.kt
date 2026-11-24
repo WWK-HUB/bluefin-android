@@ -45,28 +45,34 @@ internal object CloudIdentity {
     fun ensureToken(context: Context, client: CloudTtsClient): String {
         val prefs = prefs(context)
         val now = System.currentTimeMillis() / 1000
-        val token = prefs.getString(KEY_TOKEN, null)
-        val expires = prefs.getLong(KEY_EXPIRES, 0L)
+        if (prefs.contains(KEY_TOKEN) || prefs.contains(KEY_EXPIRES)) {
+            prefs.edit().remove(KEY_TOKEN).remove(KEY_EXPIRES).apply()
+        }
+        val tokenKey = sessionKey(client, KEY_TOKEN)
+        val expiryKey = sessionKey(client, KEY_EXPIRES)
+        val token = prefs.getString(tokenKey, null)
+        val expires = prefs.getLong(expiryKey, 0L)
         if (token != null && expires > now + REFRESH_MARGIN_SECONDS) return token
         if (token != null) {
             runCatching {
                 val refreshed = client.refresh(token)
-                store(prefs, refreshed.getString("token"), refreshed.getLong("expiresAt"))
-                return prefs.getString(KEY_TOKEN, null)!!
+                return store(prefs, client, refreshed)
             }
             // Refresh failed (expired beyond grace, revoked, network): fall
             // through to a fresh registration, which the server gates again.
         }
         val registered = client.register(deviceId(context))
-        store(prefs, registered.getString("token"), registered.getLong("expiresAt"))
-        return prefs.getString(KEY_TOKEN, null)
-            ?: throw TtsFailure(TtsCategory.AUTH_ERROR, "no_token", "设备注册失败，请稍后再试。")
+        return store(prefs, client, registered)
     }
 
     /** Drops the session so the next call re-registers (used after a 401). */
     @Synchronized
-    fun invalidate(context: Context) {
-        prefs(context).edit().remove(KEY_TOKEN).remove(KEY_EXPIRES).apply()
+    private fun invalidate(context: Context, client: CloudTtsClient, token: String) {
+        val prefs = prefs(context)
+        val key = sessionKey(client, KEY_TOKEN)
+        if (prefs.getString(key, null) == token) {
+            prefs.edit().remove(key).remove(sessionKey(client, KEY_EXPIRES)).apply()
+        }
     }
 
     /**
@@ -80,14 +86,21 @@ internal object CloudIdentity {
             return block(token)
         } catch (failure: TtsFailure) {
             if (failure.category != TtsCategory.AUTH_ERROR || failure.code == "device_revoked") throw failure
-            invalidate(context)
+            invalidate(context, client, token)
             val fresh = ensureToken(context, client)
             return block(fresh)
         }
     }
 
-    private fun store(prefs: SharedPreferences, token: String, expiresAt: Long) {
-        prefs.edit().putString(KEY_TOKEN, token).putLong(KEY_EXPIRES, expiresAt).apply()
+    private fun sessionKey(client: CloudTtsClient, field: String): String = "$field:${client.baseUrl}"
+
+    private fun store(prefs: SharedPreferences, client: CloudTtsClient, response: org.json.JSONObject): String {
+        val token = response.getString("token")
+        prefs.edit()
+            .putString(sessionKey(client, KEY_TOKEN), token)
+            .putLong(sessionKey(client, KEY_EXPIRES), response.getLong("expiresAt"))
+            .apply()
+        return token
     }
 
     private fun prefs(context: Context): SharedPreferences {

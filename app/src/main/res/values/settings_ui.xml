@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="settings_back" type="id" />
+    <item name="settings_title" type="id" />
+    <item name="settings_scroll" type="id" />
+    <item name="guide_next" type="id" />
+    <item name="guide_open_feature" type="id" />
+    <item name="guide_skip" type="id" />
+    <string name="panel_back">返回</string>
+    <string name="settings_help">说明</string>
+    <string name="settings_group_pet">桌宠</string>
+    <string name="settings_group_chat">交流</string>
+    <string name="settings_group_support">帮助与更新</string>
+    <string name="settings_overlay">悬浮窗与气泡</string>
+    <string name="settings_pet">行为与外观</string>
+    <string name="settings_character">角色与装扮</string>
+    <string name="settings_model">模型连接</string>
+    <string name="settings_about">关于与更新</string>
+    <string name="settings_not_configured">待配置</string>
+    <string name="settings_enabled">已开启</string>
+    <string name="settings_disabled">未开启</string>
+    <string name="settings_pet_help">桌宠点击穿透会把触摸交给下方的应用。小球点击穿透开启后，可回到鳍遇关闭。</string>
+    <string name="settings_overlay_help">%1$s\n\n%2$s</string>
+    <string name="settings_notifications">允许通知</string>
+    <string name="settings_notifications_help">如需从通知栏控制桌宠或停止共享，请允许鳍遇发送通知。</string>
+    <string name="settings_speech_options">语音服务与缓存</string>
+    <string name="settings_manage_voice">自制与导入音色</string>
+    <string name="settings_expanded">已展开</string>
+    <string name="settings_collapsed">已收起</string>
+    <string name="settings_restore_pet">重新摆放桌宠</string>
+    <string name="settings_size_dp">%1$d dp</string>
+    <string name="guide_title">新手指南</string>
+    <string name="guide_start">认识蓝鳍</string>
+    <string name="guide_start_body">轻点蓝鳍可以戳一戳，在头顶来回滑动可以摸头，按住就能拖动。想看更多表情和动作，点主页的「动作」。</string>
+    <string name="guide_overlay_title">让蓝鳍待在桌面</string>
+    <string name="guide_overlay_body">打开悬浮窗后，切到其他应用时也能看到蓝鳍。点悬浮小球可以打开桌宠菜单。</string>
+    <string name="guide_overlay_action">打开悬浮窗设置</string>
+    <string name="guide_chat_title">和蓝鳍聊两句</string>
+    <string name="guide_chat_body">在「模型连接」选择 OpenAI 或 Anthropic 兼容格式，填写 API 地址、模型名和 API Key。测试连接并保存后，就能打开对话。</string>
+    <string name="guide_chat_action">打开模型连接</string>
+    <string name="guide_voice_title">听见蓝鳍</string>
+    <string name="guide_voice_body">开启语音和自动朗读，蓝鳍就会把新回复念出来。想用说话代替打字，可以从对话页的麦克风安装离线语音输入。</string>
+    <string name="guide_voice_action">打开朗读设置</string>
+    <string name="guide_screen_title">让蓝鳍看看屏幕</string>
+    <string name="guide_screen_body">配置支持图片的模型后，可以请蓝鳍看一眼，或开启持续看屏让它主动评论。系统会先询问共享范围，锁屏或手动停止会结束共享。</string>
+    <string name="guide_screen_action">打开屏幕观察</string>
+    <string name="guide_finish">进入鳍遇</string>
+    <string name="guide_progress">%1$d / %2$d</string>
+</resources>

@@ -3,17 +3,13 @@ package com.wwkhub.bluefin
 import android.content.Context
 
 internal data class ModelEndpoint(
-    val providerId: String,
-    val region: ModelCatalog.Region,
+    val format: ModelApiFormat,
     val url: String,
     val model: String,
     val temperature: Double?,
     val maxOutputTokens: Int,
     val extraHeaders: String,
-) {
-    val provider: ModelProvider get() = ModelCatalog.provider(providerId)
-    val modelHint: String get() = provider.modelHint
-}
+)
 
 /**
  * App-private endpoint settings. The API key is deliberately not part of this
@@ -21,8 +17,7 @@ internal data class ModelEndpoint(
  */
 internal object ModelEndpointStore {
     const val PREFS = "bluefin_model_endpoint"
-    private const val KEY_PROVIDER = "provider"
-    private const val KEY_REGION = "region"
+    private const val KEY_FORMAT = "format"
     private const val KEY_URL = "url"
     private const val KEY_MODEL = "model"
     private const val KEY_TEMPERATURE = "temperature"
@@ -34,24 +29,20 @@ internal object ModelEndpointStore {
 
     fun load(context: Context): ModelEndpoint {
         val prefs = prefs(context)
-        val providerId = prefs.getString(KEY_PROVIDER, ModelCatalog.DEFAULT_PROVIDER_ID)
-            ?: ModelCatalog.DEFAULT_PROVIDER_ID
-        val region = runCatching {
-            ModelCatalog.Region.valueOf(
-                prefs.getString(KEY_REGION, ModelCatalog.Region.MAINLAND.name)
-                    ?: ModelCatalog.Region.MAINLAND.name,
-            )
-        }.getOrDefault(ModelCatalog.Region.MAINLAND)
-        val fallback = ModelCatalog.prefill(providerId, region)
-        val url = prefs.getString(KEY_URL, fallback.url) ?: fallback.url
-        val model = prefs.getString(KEY_MODEL, fallback.model) ?: fallback.model
+        val storedFormat = prefs.getString(KEY_FORMAT, null)
+        val format = ModelApiFormat.entries.firstOrNull { it.name == storedFormat } ?: ModelApiFormat.OPENAI
+        val legacyProvider = prefs.getString("provider", null)
+        val fallback = if (storedFormat == null && (legacyProvider != null || prefs.getBoolean(KEY_HAS_KEY, false))) {
+            legacyModelDefaults(legacyProvider, prefs.getString("region", null) == "INTERNATIONAL")
+        } else "" to ""
+        val url = prefs.getString(KEY_URL, fallback.first) ?: fallback.first
+        val model = prefs.getString(KEY_MODEL, fallback.second) ?: fallback.second
         val temperature = prefs.getString(KEY_TEMPERATURE, null)?.toDoubleOrNull()
         val maxTokens = prefs.getInt(KEY_MAX_TOKENS, DEFAULT_MAX_TOKENS)
             .takeIf { it > 0 }
             ?: DEFAULT_MAX_TOKENS
         return ModelEndpoint(
-            providerId = ModelCatalog.provider(providerId).id,
-            region = ModelCatalog.regionFor(providerId, region),
+            format = format,
             url = url,
             model = model,
             temperature = temperature,
@@ -62,8 +53,7 @@ internal object ModelEndpointStore {
 
     fun save(context: Context, endpoint: ModelEndpoint) {
         prefs(context).edit()
-            .putString(KEY_PROVIDER, ModelCatalog.provider(endpoint.providerId).id)
-            .putString(KEY_REGION, ModelCatalog.regionFor(endpoint.providerId, endpoint.region).name)
+            .putString(KEY_FORMAT, endpoint.format.name)
             .putString(KEY_URL, endpoint.url.trim())
             .putString(KEY_MODEL, endpoint.model.trim())
             .putString(KEY_TEMPERATURE, endpoint.temperature?.toString())
@@ -84,6 +74,7 @@ internal object ModelEndpointStore {
             endpoint.url,
             endpoint.model,
             hasSavedKey(context),
+            endpoint.format,
         )
     }
 

@@ -101,15 +101,12 @@ internal class ChatSession private constructor(context: Context) {
                 endpoint.url,
                 endpoint.model,
                 ModelEndpointStore.hasSavedKey(appContext),
+                endpoint.format,
             )
         ) {
             return ChatSendResult.NOT_CONFIGURED
         }
-        val apiKey = ApiKeyVault.read(appContext)
-        if (apiKey.isNullOrBlank()) {
-            ModelEndpointStore.markKeySaved(appContext, false)
-            return ChatSendResult.NOT_CONFIGURED
-        }
+        val apiKey = ApiKeyVault.readForEndpoint(appContext, endpoint) ?: return ChatSendResult.NOT_CONFIGURED
         if (screenJpeg != null && !canSendScreen(endpoint, apiKey)) return ChatSendResult.NOT_CONFIGURED
         val observation = if (screenJpeg == null) ScreenAwareness.summaryFor(content) else null
         val speechOn = BluefinStore.isSpeechOn(appContext)
@@ -154,6 +151,27 @@ internal class ChatSession private constructor(context: Context) {
     fun hasActiveWorker(): Boolean = synchronized(lock) { worker != null }
 
     fun hasPendingSpeech(): Boolean = synchronized(lock) { pendingSpeechGeneration != null }
+
+    fun idleGeneration(): Int? = synchronized(lock) {
+        requestGeneration.takeIf { worker == null && pendingSpeechGeneration == null }
+    }
+
+    fun recordScreenRemark(observation: ScreenObservation, expectedGeneration: Int): ChatSnapshot? {
+        val text = observation.remark ?: return null
+        val updated = synchronized(lock) {
+            if (idleGeneration() != expectedGeneration) return null
+            ensureLoaded()
+            responseStartIndex = lines.size
+            requestGeneration += 1
+            lines.add(ChatLine(role = ChatRole.ASSISTANT, text = text, emotion = observation.emotion.wire))
+            phase = ChatPhase.IDLE
+            lastError = null
+            persistLocked()
+            snapshot()
+        }
+        notifyListeners()
+        return updated
+    }
 
     fun stop() {
         synchronized(lock) {
@@ -358,6 +376,7 @@ internal class ChatSession private constructor(context: Context) {
             endpoint.url,
             endpoint.model,
             ModelEndpointStore.hasSavedKey(appContext),
+            endpoint.format,
         )
     }
 

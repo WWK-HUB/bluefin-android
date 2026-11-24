@@ -25,10 +25,11 @@ internal object ScreenAwareness {
     var succeededAt: Long? = null
         private set
     var status = ""
-    var reviewVisible = false
+    @Volatile var reviewVisible = false
     var onProjectionReady: ((Boolean) -> Unit)? = null
     var hideOverlayForCapture: ((Boolean) -> Unit)? = null
     var onOverlayReply: ((String, ChatSnapshot) -> Boolean)? = null
+    var onOverlayObservation: ((ChatSnapshot, () -> Boolean) -> Unit)? = null
 
     fun sendScreen(
         context: Context,
@@ -122,16 +123,21 @@ internal class ScreenModel private constructor(val endpoint: ModelEndpoint, priv
     fun matches(endpoint: ModelEndpoint, key: String) = this.endpoint == endpoint && this.key == key
 
     fun isCurrent(context: Context) =
-        ModelEndpointStore.load(context) == endpoint && ApiKeyVault.read(context) == key
+        ApiKeyVault.readForEndpoint(context, endpoint) == key
 
-    fun observe(client: ChatCompletionsClient, jpeg: ByteArray, canSend: () -> Boolean) =
-        client.observeScreen(endpoint, key, jpeg, canSend)
+    fun observe(
+        client: ChatCompletionsClient,
+        jpeg: ByteArray,
+        persona: String,
+        lastCommentedScene: String?,
+        canSend: () -> Boolean,
+    ) = client.observeScreen(endpoint, key, jpeg, persona, lastCommentedScene, canSend)
 
     companion object {
         fun read(context: Context): ScreenModel? {
             val endpoint = ModelEndpointStore.load(context)
-            val key = ApiKeyVault.read(context)
-            if (key.isNullOrBlank() || !EndpointAddressPolicy.isConfigured(endpoint.url, endpoint.model, true)) {
+            val key = ApiKeyVault.readForEndpoint(context, endpoint)
+            if (key.isNullOrBlank() || !EndpointAddressPolicy.isConfigured(endpoint.url, endpoint.model, true, endpoint.format)) {
                 return null
             }
             return ScreenModel(endpoint, key)

@@ -47,10 +47,9 @@
     <string name="hide_help">暂停走动并藏起角色；关掉后按走动开关恢复。</string>
     <string name="sound">音效</string>
     <string name="sound_help">关闭后静音页面中的声音，偏好会记住。</string>
-    <string name="reset">重置引导与角色</string>
-    <string name="reset_title">重置</string>
-    <string name="reset_message">会重新显示三步提示，并让蓝鳍回到站立。音效开关保持不变。</string>
-    <string name="reset_confirm">重置</string>
+    <string name="reset_title">重新摆放桌宠</string>
+    <string name="reset_message">将蓝鳍移回初始位置，并恢复站立。</string>
+    <string name="reset_confirm">重新摆放</string>
     <string name="cancel">取消</string>
     <string name="confirm">确定</string>
     <string name="about_title">关于</string>
@@ -60,36 +59,41 @@
     <string name="about_privacy_entry">隐私说明</string>
     <string name="about_licenses">互动与底边走动引擎：Pal AI Lab 的 Coopanion（preview/kit，GNU AGPL v3 或更高），源码副本随仓库提供，许可文本见 preview/LICENSE-Coopanion.txt。\n\n离线语音识别与本地备用合成：sherpa-onnx（k2-fsa / Next-gen Kaldi，Apache 2.0），内含 ONNX Runtime（MIT）；中文识别模型 Paraformer（FunAudioLLM，Apache 2.0）、本地备用合成引擎 ZipVoice 与声码器 Vocos 均按需下载，不随安装包分发。\n\n云端朗读：Fish Audio s2.1-pro-free 免费模型，经自建 Cloudflare Worker 代理调用，供应商密钥不在应用内。\n\n角色原画与动作帧的许可不随引擎许可改变，见项目来源。完整清单见仓库 THIRD_PARTY_NOTICES.md。</string>
     <string name="about_source">鳍遇是一款可离线互动的安卓桌宠应用，默认角色是蓝鳍。\n\n应用源码：github.com/WWK-HUB/bluefin-android。\n默认角色原画和动作帧：github.com/WWK-HUB/coopanion-bluefin-native（角色素材仓库，非应用源码）。\n互动引擎：github.com/Pal-AI-Lab/Coopanion。</string>
-    <string name="about_privacy">文字对话使用你自己填写的 OpenAI 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理。密钥只保存在本机应用私有存储，可随时在设置里清除。\n\n语音输入在本机离线识别成文字（首次使用需下载一次模型），音频不会上传、不会保存。\n\n设置「角色」中可导入 Coopanion 兼容的角色外观包并切换；切换外观不会改动模型配置、对话记录或人设。应用不会从网上自动下载角色包。\n\n朗读回复默认使用 Fish Audio 云端免费模型（s2.1-pro-free）：仅将回复文本与音色参考音频通过加密通道发送到云端代理合成，不发送聊天记录其余内容；供应商 API Key 只保存在服务端，应用内不可见、不可导出。云端持续不可用时，可在明确同意下载后使用本机 ZipVoice 离线备用合成（按需下载，不随安装包分发）。内置音色来自你自己的录音参考，导入的语音包也只保存在本机。
+    <string name="about_privacy">文字对话使用你自己填写的 OpenAI 或 Anthropic 兼容接口、模型名和 API Key；聊天和屏幕观察通过你配置的模型接口处理。密钥只保存在本机应用私有存储，可随时在设置里清除。\n\n语音输入在本机离线识别成文字（首次使用需下载一次模型），音频不会上传、不会保存。\n\n设置「角色」中可导入 Coopanion 兼容的角色外观包并切换；切换外观不会改动模型配置、对话记录或人设。应用不会从网上自动下载角色包。\n\n朗读回复默认使用 Fish Audio 云端免费模型（s2.1-pro-free）：仅将回复文本与音色参考音频通过加密通道发送到云端代理合成，不发送聊天记录其余内容；供应商 API Key 只保存在服务端，应用内不可见、不可导出。云端持续不可用时，可在明确同意下载后使用本机 ZipVoice 离线备用合成（按需下载，不随安装包分发）。创建或导入的音色包保存在本机。自制参考录音首次发给所选云端服务前会征求同意。已上传的参考录音删除后会联网同步清理。本机参考录音、云端凭据及待删除记录排除在系统备份和设备迁移之外。
 
 不含电脑控制、内置官方密钥。</string>
     <string name="open_chat">对话</string>
     <string name="model_section_title">模型</string>
-    <string name="model_provider">服务商</string>
-    <string name="model_region_mainland">中国大陆</string>
-    <string name="model_region_intl">国际</string>
+    <string name="model_format">接口格式</string>
+    <string name="model_format_required">请选择接口格式。</string>
+    <string name="model_format_help">按服务文档选择接口格式，并填写 API 地址、模型名和 Key。使用同一服务时，Key 留空可沿用已保存的密钥。</string>
+    <string name="model_format_openai">OpenAI 兼容</string>
+    <string name="model_format_anthropic">Anthropic 兼容</string>
     <string name="model_url">API 地址</string>
     <string name="model_name">模型名</string>
     <string name="model_name_hint">填写模型名</string>
     <string name="model_key">API Key</string>
+    <string name="model_key_required">请先填写 API Key。</string>
+    <string name="model_key_for_new_address">API 地址已更换，请为新地址重新填写 API Key。</string>
+    <string name="model_headers_for_new_address">API 地址已更换，请清除或更新原来保存的附加请求头。</string>
     <string name="model_key_saved">已保存</string>
     <string name="model_key_not_saved">未保存</string>
-    <string name="model_key_keep">留空保存则保留已保存的 Key</string>
     <string name="model_show">显示</string>
     <string name="model_hide">隐藏</string>
     <string name="model_clear_key">清除密钥</string>
     <string name="model_test">测试连接</string>
     <string name="model_testing">正在测试…</string>
-    <string name="model_connected">连接正常</string>
+    <string name="model_connected">连接正常（%1$d ms）</string>
+    <string name="model_connected_output_limit">已连通。模型达到输出上限，未生成文字。可调高最大输出 token 后重试。</string>
     <string name="model_advanced">高级</string>
     <string name="model_temperature">温度（可选）</string>
+    <string name="model_temperature_range">当前格式的温度需在 0 到 %1$d 之间。</string>
     <string name="model_max_tokens">最大输出 token</string>
     <string name="model_headers">附加请求头</string>
     <string name="model_headers_help">每行一个，例如 X-Gateway: value。不会写入日志。</string>
     <string name="model_save">保存模型设置</string>
     <string name="model_saved">模型设置已保存</string>
-    <string name="model_go_chat">去对话</string>
-    <string name="model_confirm_key">请确认新服务的 Key</string>
+    <string name="model_go_chat">保存并去对话</string>
     <string name="model_clear_key_title">清除密钥</string>
     <string name="model_clear_key_message">会从本机删除已保存的 API Key，模型地址和模型名不受影响。</string>
     <string name="model_clear_confirm">清除</string>
@@ -150,13 +154,8 @@
     <string name="overlay_permission_later">先在应用内用</string>
     <string name="overlay_permission_message">开启后蓝鳍可以像桌宠一样浮在屏幕上走动、被戳和拖拽。你可以随时在设置里关闭。若暂不允许，仍可在应用内互动。</string>
     <string name="overlay_permission_title">允许鳍遇显示在其他应用上层？</string>
-    <string name="tip_step">%1$d / %2$d</string>
-    <string name="tip_1">轻点角色是戳一戳。睡觉时轻点可以戳醒。</string>
-    <string name="tip_2">在头上来回滑动是摸头。按住并拖动可以把他提起。</string>
-    <string name="tip_3">快速甩动后松手会抛出，落地会头晕。上方「动作」里有全部动作和表情。</string>
     <string name="tip_skip">跳过</string>
     <string name="tip_next">下一步</string>
-    <string name="tip_done">知道了</string>
     <string name="self_test_banner">本地自测：正在使用整页预览，不是拆分资源包。</string>
 
     <!-- 0.6 character packs -->

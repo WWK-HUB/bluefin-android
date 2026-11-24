@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.graphics.drawable.ColorDrawable
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
@@ -14,7 +13,6 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.Gravity
 import android.view.View
-import android.view.WindowManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.webkit.ConsoleMessage
@@ -26,26 +24,26 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.GridLayout
-import android.widget.SeekBar
+import android.widget.CompoundButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDialog
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
+import androidx.core.view.children
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
-import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.wwkhub.bluefin.databinding.ActivityMainBinding
 import com.wwkhub.bluefin.update.UpdateCoordinator
 import com.wwkhub.bluefin.update.UpdateInstaller
 import com.wwkhub.bluefin.update.UpdateManifest
+import com.wwkhub.bluefin.voice.tts.CloudVoiceDeletion
 import com.wwkhub.bluefin.voice.tts.TtsReader
 import org.json.JSONObject
 import java.io.File
@@ -73,14 +71,17 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     private var entryPath = PreviewEntry.ROUTE_B
     private var pollGeneration = 0
     private var lastProblem: String? = null
-    private var tipIndex = 0
     private var roamOn = true
     private var petHidden = false
     private var petScale = BluefinStore.SCALE_DEFAULT
     private var petOpacity = BluefinStore.OPACITY_DEFAULT
-    private var petOrbSizeDp = BluefinStore.ORB_SIZE_DEFAULT_DP
     private var pendingOverlayGuide = false
-    private var settingsDialog: BottomSheetDialog? = null
+    private var settingsPanel: SettingsPanel? = null
+    private var guide: WelcomeGuide? = null
+    private var guideReturnsToSettings = false
+    private var petSettings: PetSettingsSection? = null
+    private var overlaySettingsListener: OverlayLauncher.Listener? = null
+    private var notificationButton: View? = null
     private var updateCoordinator: UpdateCoordinator? = null
     private var updateDialog: AlertDialog? = null
     private var updateRetry: (() -> Unit)? = null
@@ -91,8 +92,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             else clearPendingUpdate()
         }
     }
-    private var tipsDialog: AppCompatDialog? = null
-    private var tipsView: View? = null
     private var currentAppearanceId = PackFormat.BUILT_IN_ID
     private var currentManifest: PackManifest? = null
     private var pendingImport: PackAnalysis? = null
@@ -110,6 +109,13 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         if (uri != null) beginPackImport(uri, folder = true)
     }
 
+    private val voicePackCreator = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) onVoicePackChanged()
+        speechSectionView?.refresh()
+    }
+
+    internal fun openVoicePackCreator() = voicePackCreator.launch(Intent(this, VoicePackCreatorActivity::class.java))
+
     private val voicePackPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) beginVoicePackImport(uri)
     }
@@ -123,11 +129,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             KEY_OPACITY -> {
                 petOpacity = BluefinStore.readOpacity(prefs())
                 schedulePetPrefs()
-            }
-            KEY_ORB_SIZE_DP -> {
-                // Orb size only drives the overlay orb; keep the field in sync
-                // and let the open Settings sheet refresh itself.
-                petOrbSizeDp = BluefinStore.readOrbSizeDp(prefs())
             }
             KEY_ROAM -> {
                 roamOn = prefs().getBoolean(KEY_ROAM, true)
@@ -146,6 +147,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             }
             KEY_CHARACTER_ID -> {
                 refreshCharacter()
+                petSettings?.refresh()
                 loadEntry()
             }
             else -> {
@@ -158,6 +160,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) BluefinForegroundService.refresh(this)
+        refreshNotificationSetting()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -175,7 +178,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         refreshFromPrefs()
         prefs().registerOnSharedPreferenceChangeListener(prefsListener)
         applyInsets()
-        ensureForegroundService()
         setupWebView()
         binding.openActions.setOnClickListener { showActions() }
         binding.openChat.setOnClickListener { ChatEntry.request(this) }
@@ -186,11 +188,19 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (previewWeb.canGoBack()) previewWeb.goBack() else finish()
+                val panel = settingsPanel
+                val tutorial = guide
+                when {
+                    panel != null -> panel.back()
+                    tutorial != null -> tutorial.back()
+                    previewWeb.canGoBack() -> previewWeb.goBack()
+                    else -> finish()
+                }
             }
         })
 
         loadEntry()
+        restorePanels(savedInstanceState)
         consumeOverlayIntent(intent)
         consumeOpenModelIntent(intent)
         consumeOpenCharacterIntent(intent)
@@ -206,8 +216,10 @@ class MainActivity : AppCompatActivity(), BluefinHost {
 
     override fun onResume() {
         super.onResume()
+        CloudVoiceDeletion.resume(this)
         OverlayAppVisibility.setForeground(true)
-        OverlayLauncher.setSettingsVisible(settingsDialog?.isShowing == true)
+        OverlayLauncher.setSettingsVisible(settingsPanel != null || guide != null)
+        refreshNotificationSetting()
         refreshFromPrefs()
         if (currentAppearanceId != PackRepository.currentId(this)) {
             loadEntry()
@@ -244,11 +256,8 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         pollGeneration++
         pendingImport?.cleanup()
         pendingImport = null
-        openCharacterSection = null
-        speechSectionView?.dispose()
-        speechSectionView = null
+        disposeSettingsSections()
         voicePackImportCallback = null
-        dismissTips()
         prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         cuePlayer.release()
         if (::binding.isInitialized) {
@@ -383,7 +392,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             lastProblem = null
             previewReady = false
             binding.openActions.isEnabled = false
-            dismissTips()
             if (!useDefaultPreview) {
                 entryPath = PreviewEntry.PACK_HOST
                 binding.selfTestBanner.visibility = View.GONE
@@ -548,17 +556,8 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         }
     }
 
-    private fun voicePackProblem(error: VoicePackException): String = when (error.reason) {
-        VoicePackReject.BUILT_IN_ID,
-        VoicePackReject.RESERVED_ID,
-        -> getString(R.string.speech_voice_reject_reserved)
-        VoicePackReject.INVALID_ID -> getString(R.string.speech_voice_reject_invalid_id)
-        VoicePackReject.INCOMPATIBLE -> getString(R.string.speech_voice_reject_incompatible)
-        VoicePackReject.INVALID_REFERENCE, VoicePackReject.INVALID_TEXT,
-        VoicePackReject.INVALID_TUNING, VoicePackReject.BAD_JSON,
-        VoicePackReject.INCOMPLETE,
-        -> getString(R.string.speech_voice_reject_generic)
-    }
+    private fun voicePackProblem(error: VoicePackException): String =
+        voicePackProblem(this, error)
 
     /** Called when the朗读 switch or engine state changed in settings. */
     fun onSpeechPreferenceChanged() {
@@ -811,7 +810,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         binding.statusOverlay.visibility = View.GONE
         binding.openActions.isEnabled = true
         applyPetPrefs()
-        if (!prefs().getBoolean(KEY_TIPS_DONE, false)) showTips()
     }
 
     private fun showActions() {
@@ -889,228 +887,108 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         )
     }
 
-    private fun showSettings(scrollToModel: Boolean = false, scrollToCharacter: Boolean = false) {
-        settingsDialog?.dismiss()
-        val dialog = BottomSheetDialog(this)
-        settingsDialog = dialog
-        val view = layoutInflater.inflate(R.layout.sheet_settings, null)
-        val characterSectionFrame = view.findViewById<FrameLayout>(R.id.character_section)
-        val modelSection = view.findViewById<android.widget.FrameLayout>(R.id.model_section)
-        val personaSection = view.findViewById<android.widget.FrameLayout>(R.id.persona_section)
-        val voiceSection = view.findViewById<android.widget.FrameLayout>(R.id.voice_section)
-        val speechSection = view.findViewById<android.widget.FrameLayout>(R.id.speech_section)
-        layoutInflater.inflate(R.layout.section_model_settings, modelSection, true)
-        layoutInflater.inflate(R.layout.section_persona_settings, personaSection, true)
-        layoutInflater.inflate(R.layout.section_voice_settings, voiceSection, true)
-        val characterSection = CharacterSection(this, characterSectionFrame)
-        openCharacterSection = characterSection
-        ModelSettingsSection(this, modelSection) { ChatEntry.request(this) }
-        PersonaEditorSection(this, personaSection)
-        VoiceSettingsSection(this, voiceSection)
-        speechSectionView = SpeechSettingsSection(this, speechSection)
-        val sound = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.sound_switch)
-        val roam = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.roam_switch)
-        val hide = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.hide_switch)
-        val overlay = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.overlay_switch)
-        val bubblePreview = view.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(
-            R.id.bubble_preview_switch,
-        )
-        val sizeSlider = view.findViewById<SeekBar>(R.id.size_slider)
-        val sizeValue = view.findViewById<android.widget.TextView>(R.id.size_value)
-        val opacitySlider = view.findViewById<SeekBar>(R.id.opacity_slider)
-        val opacityValue = view.findViewById<android.widget.TextView>(R.id.opacity_value)
-        val orbSizeSlider = view.findViewById<SeekBar>(R.id.orb_size_slider)
-        val orbSizeValue = view.findViewById<android.widget.TextView>(R.id.orb_size_value)
-        val orbTouch = OrbTouchSettings(view, prefs())
-        val petTouchThrough = view.findViewById<android.widget.CompoundButton>(R.id.pet_touch_through_switch)
-        val autoRest = view.findViewById<android.widget.CompoundButton>(R.id.auto_rest_switch)
-        val aboutVersion = view.findViewById<android.widget.TextView>(R.id.about_version)
-        var syncing = false
+    private fun showSettings(page: SettingsPage = SettingsPage.HOME) {
+        val existing = settingsPanel
+        val panel = existing ?: SettingsPanel(this, ::closeSettings, ::buildSettingsPage, ::openSettingsLink)
+        panel.fromGuide = guide != null
+        if (existing == null) {
+            settingsPanel = panel
+            binding.root.addView(panel.view, FrameLayout.LayoutParams(-1, -1))
+        }
+        panel.show(page)
+        syncPanels()
+    }
 
-        fun syncControls() {
+    private fun closeSettings() {
+        val panel = settingsPanel ?: return
+        panel.hideKeyboard()
+        binding.root.removeView(panel.view)
+        settingsPanel = null
+        disposeSettingsSections()
+        syncPanels()
+    }
+
+    private fun disposeSettingsSections() {
+        openCharacterSection = null
+        speechSectionView?.dispose()
+        speechSectionView = null
+        petSettings?.dispose()
+        petSettings = null
+        overlaySettingsListener?.let(OverlayLauncher::removeListener)
+        overlaySettingsListener = null
+        notificationButton = null
+    }
+
+    private fun buildSettingsPage(page: SettingsPage, body: LinearLayout) {
+        val panel = settingsPanel?.view ?: return
+        val content = FrameLayout(this).apply {
+            background = panel.card()
+            setPadding(dp(18), dp(12), dp(18), dp(14))
+        }
+        body.addView(content, LinearLayout.LayoutParams(-1, -2))
+        when (page) {
+            SettingsPage.OVERLAY -> bindOverlaySettings(layoutInflater.inflate(R.layout.page_overlay_settings, content, true))
+            SettingsPage.PET -> {
+                layoutInflater.inflate(R.layout.page_pet_settings, content, true)
+                petSettings = PetSettingsSection(content, prefs()) { currentManifest?.canWalk != false }
+                content.findViewById<View>(R.id.reset_button).setOnClickListener { confirmReset() }
+            }
+            SettingsPage.CHARACTER -> openCharacterSection = CharacterSection(this, content)
+            SettingsPage.MODEL -> {
+                layoutInflater.inflate(R.layout.section_model_settings, content, true)
+                ModelSettingsSection(this, content) { ChatEntry.request(this) }
+            }
+            SettingsPage.PERSONA -> {
+                layoutInflater.inflate(R.layout.section_persona_settings, content, true)
+                PersonaEditorSection(this, content)
+            }
+            SettingsPage.VOICE -> {
+                layoutInflater.inflate(R.layout.section_voice_settings, content, true)
+                VoiceSettingsSection(this, content)
+            }
+            SettingsPage.SPEECH -> speechSectionView = SpeechSettingsSection(this, content)
+            SettingsPage.ABOUT -> {
+                layoutInflater.inflate(R.layout.page_about_settings, content, true)
+                bindAboutSettings(content)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun bindOverlaySettings(view: View) {
+        val overlay = view.findViewById<CompoundButton>(R.id.overlay_switch)
+        val bubble = view.findViewById<CompoundButton>(R.id.bubble_preview_switch)
+        var syncing = false
+        val listener = OverlayLauncher.Listener { showing ->
             syncing = true
-            orbTouch.sync()
-            petTouchThrough.isChecked = BluefinStore.readClickThrough(prefs())
-            autoRest.isChecked = prefs().getBoolean(BluefinStore.KEY_AUTO_REST, true)
-            sound.isChecked = soundOn
-            roam.isChecked = roamOn && (currentManifest?.canWalk != false)
-            hide.isChecked = petHidden
-            bubblePreview.isChecked = BluefinStore.readBubblePreview(prefs())
-            sizeSlider.max = 80
-            sizeSlider.progress = BluefinStore.scaleToProgress(petScale)
-            sizeValue.text = String.format(Locale.US, "%.2f", petScale)
-            opacitySlider.max = 100
-            opacitySlider.progress = BluefinStore.opacityToProgress(petOpacity)
-            opacityValue.text = "${(petOpacity * 100).roundToInt()}%"
-            orbSizeSlider.max = 28
-            orbSizeSlider.progress = BluefinStore.orbSizeToProgress(petOrbSizeDp)
-            orbSizeValue.text = "${petOrbSizeDp.roundToInt()}dp"
+            overlay.isChecked = showing
             syncing = false
         }
-
-        var overlaySync = false
-        val overlayListener = OverlayLauncher.Listener { showing ->
-            if (overlay.isChecked == showing) return@Listener
-            overlaySync = true
-            overlay.isChecked = showing
-            overlaySync = false
-        }
         overlay.isChecked = OverlayLauncher.isShowing()
-        syncControls()
         overlay.setOnCheckedChangeListener { _, checked ->
-            if (overlaySync || checked == OverlayLauncher.isShowing()) return@setOnCheckedChangeListener
-            if (checked) {
-                if (!Settings.canDrawOverlays(this)) {
-                    overlaySync = true
-                    overlay.isChecked = false
-                    overlaySync = false
-                    OverlayLauncher.showGuide(this)
-                } else if (!OverlayLauncher.show(this)) {
-                    overlaySync = true
-                    overlay.isChecked = false
-                    overlaySync = false
-                }
-            } else {
+            if (syncing) return@setOnCheckedChangeListener
+            if (!checked) {
                 OverlayLauncher.hide(this)
+            } else if (!Settings.canDrawOverlays(this)) {
+                listener.onOverlayVisibilityChanged(false)
+                OverlayLauncher.showGuide(this, force = true)
+            } else if (!OverlayLauncher.show(this)) {
+                listener.onOverlayVisibilityChanged(false)
             }
         }
-        OverlayLauncher.addListener(overlayListener)
-        val dialogPrefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            when (key) {
-                KEY_SCALE, KEY_SIZE -> {
-                    petScale = BluefinStore.readScale(prefs())
-                    view.post { syncControls() }
-                }
-                KEY_OPACITY -> {
-                    petOpacity = BluefinStore.readOpacity(prefs())
-                    view.post { syncControls() }
-                }
-                KEY_ORB_SIZE_DP -> {
-                    petOrbSizeDp = BluefinStore.readOrbSizeDp(prefs())
-                    view.post { syncControls() }
-                }
-                KEY_ROAM -> {
-                    roamOn = prefs().getBoolean(KEY_ROAM, true)
-                    view.post { syncControls() }
-                }
-                KEY_SOUND -> {
-                    soundOn = prefs().getBoolean(KEY_SOUND, true)
-                    view.post { syncControls() }
-                }
-                KEY_HIDDEN -> {
-                    petHidden = prefs().getBoolean(KEY_HIDDEN, false)
-                    view.post { syncControls() }
-                }
-                KEY_BUBBLE_PREVIEW, BluefinStore.KEY_CLICK_THROUGH, BluefinStore.KEY_AUTO_REST,
-                BluefinStore.KEY_ORB_CLICK_THROUGH, BluefinStore.KEY_ORB_OPACITY -> {
-                    view.post { syncControls() }
-                }
-                BluefinStore.KEY_SPEECH_ON, BluefinStore.KEY_VOICE_PACK_ID -> {
-                    speechSectionView?.refresh()
-                }
-                KEY_CHARACTER_ID -> {
-                    refreshCharacter()
-                    view.post {
-                        syncControls()
-                        characterSection.refresh()
-                    }
-                }
-                else -> {
-                    if (key != null && key.startsWith(KEY_CHARACTER_SCHEME_PREFIX)) {
-                        view.post {
-                            syncControls()
-                            characterSection.refresh()
-                        }
-                    }
-                }
-            }
+        overlaySettingsListener = listener
+        OverlayLauncher.addListener(listener)
+        bubble.isChecked = BluefinStore.readBubblePreview(prefs())
+        bubble.setOnCheckedChangeListener { _, checked -> BluefinStore.writeBubblePreview(prefs(), checked) }
+        view.findViewById<View>(R.id.overlay_prompt_reset).setOnClickListener { OverlayLauncher.resetPrompt(this) }
+        notificationButton = view.findViewById<View>(R.id.settings_notification).apply {
+            setOnClickListener { requestNotifications() }
         }
-        prefs().registerOnSharedPreferenceChangeListener(dialogPrefListener)
-        dialog.setOnDismissListener {
-            if (settingsDialog === dialog) {
-                settingsDialog = null
-                OverlayLauncher.setSettingsVisible(false)
-            }
-            prefs().unregisterOnSharedPreferenceChangeListener(dialogPrefListener)
-            OverlayLauncher.removeListener(overlayListener)
-            if (openCharacterSection === characterSection) openCharacterSection = null
-            speechSectionView?.dispose()
-        }
-        view.findViewById<View>(R.id.overlay_prompt_reset).setOnClickListener {
-            OverlayLauncher.resetPrompt(this)
-        }
-        sound.setOnCheckedChangeListener { _, checked ->
-            if (syncing) return@setOnCheckedChangeListener
-            soundOn = checked
-            prefs().edit().putBoolean(KEY_SOUND, checked).apply()
-            applySound()
-        }
-        roam.setOnCheckedChangeListener { _, checked ->
-            if (syncing) return@setOnCheckedChangeListener
-            if (checked && currentManifest?.canWalk == false) {
-                Toast.makeText(this, R.string.character_cannot_walk, Toast.LENGTH_SHORT).show()
-                syncing = true
-                roam.isChecked = false
-                syncing = false
-                return@setOnCheckedChangeListener
-            }
-            roamOn = checked
-            prefs().edit().putBoolean(KEY_ROAM, checked).apply()
-            applyPetPrefs()
-        }
-        hide.setOnCheckedChangeListener { _, checked ->
-            if (syncing) return@setOnCheckedChangeListener
-            petHidden = checked
-            prefs().edit().putBoolean(KEY_HIDDEN, checked).apply()
-            applyPetPrefs()
-        }
-        petTouchThrough.setOnCheckedChangeListener { _, checked ->
-            if (!syncing) BluefinStore.writeClickThrough(prefs(), checked)
-        }
-        autoRest.setOnCheckedChangeListener { _, checked ->
-            if (!syncing) prefs().edit().putBoolean(BluefinStore.KEY_AUTO_REST, checked).apply()
-        }
-        bubblePreview.setOnCheckedChangeListener { _, checked ->
-            if (syncing) return@setOnCheckedChangeListener
-            // Persist only. An already-created preview removes itself through
-            // its own preference listener; this path never constructs it.
-            BluefinStore.writeBubblePreview(prefs(), checked)
-        }
-        sizeSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (syncing) return
-                petScale = BluefinStore.progressToScale(progress)
-                sizeValue.text = String.format(Locale.US, "%.2f", petScale)
-                BluefinStore.writeScale(prefs(), petScale)
-            }
+        refreshNotificationSetting()
+    }
 
-            override fun onStartTrackingTouch(bar: SeekBar) = Unit
-            override fun onStopTrackingTouch(bar: SeekBar) = Unit
-        })
-        opacitySlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (syncing) return
-                petOpacity = BluefinStore.progressToOpacity(progress)
-                opacityValue.text = "${(petOpacity * 100).roundToInt()}%"
-                BluefinStore.writeOpacity(prefs(), petOpacity)
-            }
-
-            override fun onStartTrackingTouch(bar: SeekBar) = Unit
-            override fun onStopTrackingTouch(bar: SeekBar) = Unit
-        })
-        orbSizeSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (syncing) return
-                petOrbSizeDp = BluefinStore.progressToOrbSize(progress)
-                orbSizeValue.text = "${petOrbSizeDp.roundToInt()}dp"
-                BluefinStore.writeOrbSizeDp(prefs(), petOrbSizeDp)
-                applyPetPrefs()
-            }
-
-            override fun onStartTrackingTouch(bar: SeekBar) = Unit
-            override fun onStopTrackingTouch(bar: SeekBar) = Unit
-        })
-        aboutVersion.text = getString(R.string.about_version, installedVersionName())
+    private fun bindAboutSettings(view: View) {
+        view.findViewById<TextView>(R.id.about_version).text = getString(R.string.about_version, installedVersionName())
         view.findViewById<View>(R.id.about_licenses).setOnClickListener {
             showAboutDetail(R.string.about_licenses_entry, R.string.about_licenses)
         }
@@ -1121,44 +999,25 @@ class MainActivity : AppCompatActivity(), BluefinHost {
             showAboutDetail(R.string.about_privacy_entry, R.string.about_privacy)
         }
         view.findViewById<View>(R.id.about_check_update).setOnClickListener { startUpdateCheck() }
-        view.findViewById<View>(R.id.reset_button).setOnClickListener {
-            dialog.dismiss()
-            confirmReset()
-        }
-        dialog.setContentView(view)
-        dialog.setOnShowListener {
-            dialog.behavior.skipCollapsed = true
-            dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
-            val sheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
-            sheet?.layoutParams?.height = resources.displayMetrics.heightPixels
-        }
-        dialog.show()
-        OverlayLauncher.setSettingsVisible(true)
-        if (scrollToModel) {
-            view.post {
-                (view as? android.widget.ScrollView)?.smoothScrollTo(
-                    0,
-                    modelSection.top.coerceAtLeast(0),
-                )
+    }
+
+    private fun openSettingsLink(page: SettingsPage) {
+        when (page) {
+            SettingsPage.SCREEN -> startActivity(ScreenAwarenessActivity.settingsIntent(this))
+            SettingsPage.GUIDE -> {
+                closeSettings()
+                showGuide(0, returnToSettings = true)
             }
-        } else if (scrollToCharacter) {
-            view.post {
-                (view as? android.widget.ScrollView)?.smoothScrollTo(
-                    0,
-                    characterSectionFrame.top.coerceAtLeast(0),
-                )
-            }
+            else -> showSettings(page)
         }
     }
 
     fun openModelSettings() {
-        if (isFinishing || isDestroyed) return
-        showSettings(scrollToModel = true)
+        if (!isFinishing && !isDestroyed) showSettings(SettingsPage.MODEL)
     }
 
     fun openCharacterSettings() {
-        if (isFinishing || isDestroyed) return
-        showSettings(scrollToCharacter = true)
+        if (!isFinishing && !isDestroyed) showSettings(SettingsPage.CHARACTER)
     }
 
     @Suppress("DEPRECATION")
@@ -1171,7 +1030,7 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         MaterialAlertDialogBuilder(this)
             .setTitle(titleRes)
             .setMessage(bodyRes)
-            .setPositiveButton(R.string.tip_done, null)
+            .setPositiveButton(android.R.string.ok, null)
             .show()
     }
 
@@ -1345,28 +1204,40 @@ class MainActivity : AppCompatActivity(), BluefinHost {
     }
 
     private fun performReset() {
-        prefs().edit().putBoolean(KEY_TIPS_DONE, false).apply()
         if (!previewReady) {
-            showTips()
+            Toast.makeText(this, R.string.loading, Toast.LENGTH_SHORT).show()
             return
         }
         previewWeb.evaluateJavascript(RESET_JS) { raw ->
             if (raw?.contains("missing") == true) previewWeb.reload()
-            showTips()
         }
+        closeSettings()
     }
 
-    private fun ensureForegroundService() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            if (granted == PackageManager.PERMISSION_GRANTED) {
-                BluefinForegroundService.refresh(this)
-            } else {
-                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    private fun refreshNotificationSetting() {
+        notificationButton?.visibility = if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) View.VISIBLE else View.GONE
+    }
+
+    private fun requestNotifications() {
+        if (Build.VERSION.SDK_INT < 33) return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.settings_notifications)
+            .setMessage(R.string.settings_notifications_help)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                if (prefs().getBoolean(KEY_NOTIFICATION_REQUESTED, false) &&
+                    !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+                ) {
+                    startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                } else {
+                    prefs().edit().putBoolean(KEY_NOTIFICATION_REQUESTED, true).apply()
+                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
-        } else {
-            BluefinForegroundService.refresh(this)
-        }
+            .show()
     }
 
     private fun refreshFromPrefs() {
@@ -1375,7 +1246,6 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         petHidden = prefs().getBoolean(KEY_HIDDEN, false)
         petScale = BluefinStore.readScale(prefs())
         petOpacity = BluefinStore.readOpacity(prefs())
-        petOrbSizeDp = BluefinStore.readOrbSizeDp(prefs())
     }
 
     private fun schedulePetPrefs() {
@@ -1437,142 +1307,59 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         binding.root.post { openCharacterSettings() }
     }
 
-    private fun showTips() {
-        if (isFinishing || isDestroyed) return
-        if (!binding.root.isAttachedToWindow) {
-            binding.root.post { showTips() }
-            return
-        }
-        dismissTips()
-        tipIndex = 0
-        val dialog = AppCompatDialog(this, R.style.Theme_Bluefin_TipsDialog)
-        val content = dialog.layoutInflater.inflate(R.layout.dialog_tips, null)
-        dialog.setContentView(content)
-        dialog.setCancelable(false)
-        dialog.setCanceledOnTouchOutside(false)
-        content.findViewById<View>(R.id.tips_skip).setOnClickListener { finishTips() }
-        content.findViewById<View>(R.id.tips_next).setOnClickListener { advanceTip() }
-        applyTipsPlacement(content)
-        dialog.window?.let { window ->
-            window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_DIM_BEHIND or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            )
-            window.setDimAmount(TIPS_DIM_AMOUNT)
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            window.setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-            )
-            window.setGravity(Gravity.TOP)
-        }
-        dialog.setOnShowListener {
-            BluefinMotion.enter(content.findViewById(R.id.tips_card), y = -dp(8).toFloat())
-            dialog.window?.let { window ->
-                window.setLayout(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                )
-                window.setDimAmount(TIPS_DIM_AMOUNT)
-            }
-        }
-        dialog.setOnDismissListener {
-            if (tipsDialog === dialog) {
-                tipsDialog = null
-                tipsView = null
-            }
-        }
-        tipsDialog = dialog
-        tipsView = content
-        renderTip()
-        dialog.show()
+    override fun onSaveInstanceState(outState: Bundle) {
+        settingsPanel?.let { outState.putString(STATE_SETTINGS_PAGE, it.page.name) }
+        guide?.let { outState.putInt(STATE_GUIDE, it.index) }
+        outState.putBoolean(STATE_GUIDE_RETURN, guideReturnsToSettings)
+        super.onSaveInstanceState(outState)
     }
 
-    /** Keeps the card-height window just below the activity's top bar. */
-    private fun applyTipsPlacement(view: View) {
-        val density = resources.displayMetrics.density
-        val horizontal = (12 * density).roundToInt()
-        val topGap = (8 * density).roundToInt()
-        view.setPadding(horizontal, 0, horizontal, 0)
-
-        val place = Runnable { placeTipsBelowTopBar(view, topGap) }
-        val schedulePlacement: () -> Unit = {
-            view.removeCallbacks(place)
-            view.post(place)
+    private fun restorePanels(state: Bundle?) {
+        val savedStep = state?.getInt(STATE_GUIDE, -1) ?: -1
+        if (savedStep >= 0) {
+            showGuide(savedStep, state?.getBoolean(STATE_GUIDE_RETURN) == true)
+        } else if (!prefs().getBoolean(KEY_TIPS_DONE, false)) {
+            showGuide(prefs().getInt(KEY_GUIDE_STEP, 0))
         }
-
-        // The window itself wraps the card, so move the window to the measured
-        // top-bar bottom instead of reserving that offset as top padding.
-        view.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-            override fun onLayoutChange(
-                changedView: View,
-                left: Int,
-                top: Int,
-                right: Int,
-                bottom: Int,
-                oldLeft: Int,
-                oldTop: Int,
-                oldRight: Int,
-                oldBottom: Int,
-            ) {
-                if (tipsView === changedView) schedulePlacement()
-            }
-        })
-        ViewCompat.setOnApplyWindowInsetsListener(view) { content, insets ->
-            if (tipsView === content) schedulePlacement()
-            insets
-        }
-        ViewCompat.requestApplyInsets(view)
-        schedulePlacement()
+        val savedPage = state?.getString(STATE_SETTINGS_PAGE)
+        SettingsPage.entries.firstOrNull { it.name == savedPage }?.let(::showSettings)
     }
 
-    private fun placeTipsBelowTopBar(view: View, topGap: Int) {
-        if (tipsView !== view) return
-        val dialog = tipsDialog ?: return
-        val window = dialog.window ?: return
-        val topBar = binding.topBar
-        if (!topBar.isAttachedToWindow || topBar.height <= 0) return
-        val topBarLocation = IntArray(2)
-        topBar.getLocationOnScreen(topBarLocation)
-        val targetTop = topBarLocation[1] + topBar.height + topGap
-        val windowLocation = IntArray(2)
-        view.getLocationOnScreen(windowLocation)
-        val delta = targetTop - windowLocation[1]
-        if (delta != 0) {
-            // The dialog window can start at the screen top or below the status
-            // bar depending on the platform; correct against its measured spot.
-            window.attributes = window.attributes.apply { y += delta }
-        }
-    }
-
-    private fun renderTip() {
-        val content = tipsView ?: return
-        content.findViewById<TextView>(R.id.tips_step).text =
-            getString(R.string.tip_step, tipIndex + 1, TIP_BODIES.size)
-        content.findViewById<TextView>(R.id.tips_body).setText(TIP_BODIES[tipIndex])
-        content.findViewById<TextView>(R.id.tips_next).setText(
-            if (tipIndex == TIP_BODIES.lastIndex) R.string.tip_done else R.string.tip_next,
+    private fun showGuide(start: Int, returnToSettings: Boolean = false) {
+        val tutorial = WelcomeGuide(
+            this, start,
+            onProgress = { prefs().edit().putInt(KEY_GUIDE_STEP, it).apply() },
+            open = ::openSettingsLink,
+            finish = ::completeGuide,
         )
+        guide = tutorial
+        guideReturnsToSettings = returnToSettings
+        binding.root.addView(tutorial.view, FrameLayout.LayoutParams(-1, -1))
+        syncPanels()
     }
 
-    private fun advanceTip() {
-        if (tipIndex >= TIP_BODIES.lastIndex) finishTips() else {
-            tipIndex += 1
-            renderTip()
+    private fun completeGuide() {
+        val tutorial = guide ?: return
+        prefs().edit().putBoolean(KEY_TIPS_DONE, true).remove(KEY_GUIDE_STEP).apply()
+        binding.root.removeView(tutorial.view)
+        guide = null
+        val returnToSettings = guideReturnsToSettings
+        guideReturnsToSettings = false
+        if (returnToSettings) showSettings() else syncPanels()
+    }
+
+    private fun syncPanels() {
+        val settings = settingsPanel?.view
+        val tutorial = guide?.view
+        tutorial?.visibility = if (settings == null) View.VISIBLE else View.GONE
+        val activePanel = settings ?: tutorial
+        binding.root.children.forEach { view ->
+            view.importantForAccessibility = if (activePanel == null || view === activePanel) {
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            } else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
-    }
-
-    private fun finishTips() {
-        prefs().edit().putBoolean(KEY_TIPS_DONE, true).apply()
-        dismissTips()
-    }
-
-    private fun dismissTips() {
-        val dialog = tipsDialog ?: return
-        tipsDialog = null
-        tipsView = null
-        dialog.dismiss()
+        activePanel?.let { ViewCompat.requestApplyInsets(it) }
+        OverlayLauncher.setSettingsVisible(activePanel != null)
     }
 
     private fun showStatus(message: String, error: Boolean) {
@@ -1610,21 +1397,22 @@ class MainActivity : AppCompatActivity(), BluefinHost {
         const val BRIDGE_NAME = "BluefinNative"
         const val PREFS = BluefinStore.PREFS
         const val KEY_TIPS_DONE = BluefinStore.KEY_TIPS_DONE
+        const val KEY_GUIDE_STEP = "guide_step"
+        const val KEY_NOTIFICATION_REQUESTED = "notification_requested"
+        const val STATE_SETTINGS_PAGE = "settings_page"
+        const val STATE_GUIDE = "guide_page"
+        const val STATE_GUIDE_RETURN = "guide_return"
         const val KEY_SOUND = BluefinStore.KEY_SOUND
-        const val KEY_BUBBLE_PREVIEW = BluefinStore.KEY_BUBBLE_PREVIEW
         const val KEY_ROAM = BluefinStore.KEY_ROAM
         const val KEY_HIDDEN = BluefinStore.KEY_HIDDEN
         const val KEY_SIZE = BluefinStore.KEY_SIZE
         const val KEY_SCALE = BluefinStore.KEY_SCALE
         const val KEY_OPACITY = BluefinStore.KEY_OPACITY
-        const val KEY_ORB_SIZE_DP = BluefinStore.KEY_ORB_SIZE_DP
         const val KEY_CHARACTER_ID = BluefinStore.KEY_CHARACTER_ID
         const val KEY_CHARACTER_SCHEME_PREFIX = BluefinStore.KEY_CHARACTER_SCHEME_PREFIX
         const val READY_JS =
             "(function(){return !!(window.__bluefinNative&&window.__bluefinNative.ready&&window.__bluefinNative.ready());})()"
         const val RESET_JS =
             "(function(){return window.__bluefinNative?String(window.__bluefinNative.reset()):'missing';})()"
-        const val TIPS_DIM_AMOUNT = 0.08f
-        val TIP_BODIES = intArrayOf(R.string.tip_1, R.string.tip_2, R.string.tip_3)
     }
 }

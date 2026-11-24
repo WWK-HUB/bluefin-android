@@ -68,6 +68,18 @@
             android:taskAffinity="com.wwkhub.bluefin.voice"
             android:theme="@style/Theme.Bluefin.VoiceSetup" />
         <activity
+            android:name=".VoiceUploadConsentActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.Bluefin.VoiceSetup" />
+        <activity
+            android:name=".VoicePackCreatorActivity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.Bluefin"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ChatScreen"
             android:configChanges="keyboard|keyboardHidden|navigation"
             android:exported="false"
@@ -80,6 +92,7 @@
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Bluefin"
+            android:windowSoftInputMode="adjustResize"
             tools:ignore="LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

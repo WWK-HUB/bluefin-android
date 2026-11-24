@@ -13,19 +13,19 @@ import java.security.MessageDigest
 internal class TtsCache(context: Context) {
     private val root = File(context.applicationContext.cacheDir, DIR)
 
-    fun fileFor(key: String): File = File(root, "$key.mp3")
+    private fun fileFor(voiceId: String, key: String): File = File(root, "$voiceId.$key.mp3")
 
-    fun get(key: String): File? {
-        val file = fileFor(key)
+    fun get(voiceId: String, key: String): File? {
+        val file = fileFor(voiceId, key)
         if (!file.isFile || file.length() == 0L) return null
         file.setLastModified(System.currentTimeMillis())
         return file
     }
 
     /** Moves a completed temp file into the cache and evicts over the ceiling. */
-    fun put(key: String, temp: File): File? {
+    fun put(voiceId: String, key: String, temp: File): File? {
         root.mkdirs()
-        val target = fileFor(key)
+        val target = fileFor(voiceId, key)
         if (!temp.renameTo(target)) {
             temp.copyTo(target, overwrite = true)
             temp.delete()
@@ -39,6 +39,14 @@ internal class TtsCache(context: Context) {
 
     fun clear() {
         root.deleteRecursively()
+    }
+
+    fun removeVoice(voiceId: String) {
+        root.listFiles().orEmpty().filter { it.name.startsWith("$voiceId.") }.forEach { it.delete() }
+    }
+
+    fun removeLegacyEntries() {
+        root.listFiles().orEmpty().filter { LEGACY_FILE.matches(it.name) }.forEach { it.delete() }
     }
 
     private fun evict() {
@@ -56,8 +64,10 @@ internal class TtsCache(context: Context) {
         const val MAX_BYTES = 50L * 1024 * 1024
 
         /** Stable cache key; pure so JVM tests cover collision resistance. */
-        fun key(text: String, voiceId: String, speed: Float, emotion: String): String {
-            val input = "v1|$voiceId|%.2f|$emotion|$text".format(java.util.Locale.US, speed)
+        private val LEGACY_FILE = Regex("""[0-9a-f]{40}\.mp3""")
+
+        fun key(text: String, voiceId: String, speed: Float, emotion: String, base: String = "", revision: Long = 0): String {
+            val input = "v2|$base|$voiceId|$revision|%.2f|$emotion|$text".format(java.util.Locale.US, speed)
             val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
             return digest.joinToString("") { "%02x".format(it) }.take(40)
         }

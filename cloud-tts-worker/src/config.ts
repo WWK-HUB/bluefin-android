@@ -24,9 +24,12 @@ export interface Env {
   UPSTREAM_TIMEOUT_MS?: string;
   TOKEN_TTL_SECONDS?: string;
   PROBE_MIN_INTERVAL_MS?: string;
+  VOICE_RETENTION_ENABLED?: string;
 }
 
 /** The only upstream host this proxy will ever call. */
+export const DEVICE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
 export const FISH_HOST = "api.fish.audio";
 
 /**

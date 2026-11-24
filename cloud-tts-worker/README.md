@@ -129,3 +129,9 @@ App 验收包用 `-PcloudTtsBase=http://10.0.2.2:8787` 构建即可对接（模�
 - `sharp`（miniflare 传递开发依赖，libheif/librsvg 公告）截至 0.35.5 无修复版；
   仅影响本地 `wrangler pages dev` 的 Images 模拟（本项目不使用），**线上部署包不含
   sharp/undici**（esbuild 仅打包 src/ 依赖：@msgpack/msgpack）。上游发布修复版后升级即可。
+
+## 参考录音清理
+
+`DELETE /v1/voices/{id}` 先撤下设备私有映射，再清理此服务存储的参考录音。返回 `{"deleted":true}` 时表示已收到清理确认。链接到已有 Fish 模型的记录仅解除绑定。
+
+独立 Worker 的 Cron 每天 UTC 03:37 生成清理报告。部署配置的 `VOICE_RETENTION_ENABLED` 默认为 `false`。上线前通过授权的 `POST /admin/voice-maintenance` 发送 `{}` 查看计数，按返回的 `cursor` 继续检查所有页面。报告只包含待回收设备和音频计数。比较活跃样本及其映射后，在独立 Worker 的配置启用该变量。每日分批释放超过 90 天的设备名额和持有的副本。可在紧急情况下将开关改回 `false` 并重新部署。 [Cloudflare Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)

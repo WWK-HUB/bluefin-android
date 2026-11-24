@@ -43,6 +43,7 @@
         android:textSize="16sp" />
 
     <TextView
+        android:id="@+id/orb_touch_help"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/orb_button_click_through_help"

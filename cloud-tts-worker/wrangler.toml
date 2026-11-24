@@ -16,6 +16,7 @@
 name = "bluefin-tts"
 pages_build_output_dir = "dist-pages"
 compatibility_date = "2025-09-01"
+compatibility_flags = ["enable_request_signal"]
 
 [vars]
 # Fair-use guards. All are deployer config; clients can never override them.
@@ -31,6 +32,7 @@ MAX_AUDIO_BYTES = "4194304"
 UPSTREAM_TIMEOUT_MS = "30000"
 TOKEN_TTL_SECONDS = "604800"
 PROBE_MIN_INTERVAL_MS = "60000"
+VOICE_RETENTION_ENABLED = "false"
 
 [[kv_namespaces]]
 binding = "VOICES"

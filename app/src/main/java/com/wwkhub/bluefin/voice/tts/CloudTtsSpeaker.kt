@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import com.wwkhub.bluefin.BluefinForegroundService
 import com.wwkhub.bluefin.VoicePack
+import com.wwkhub.bluefin.VoicePackRepository
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.CancellationException
@@ -34,7 +35,7 @@ internal class CloudTtsSpeaker(context: Context) {
         const val MIN_AUDIO_BYTES = 512L
     }
 
-    private class Playback {
+    private class Playback(val client: CloudTtsClient, val revision: Long) {
         lateinit var worker: Thread
         @Volatile var current: MediaPlayer? = null
     }
@@ -43,7 +44,6 @@ internal class CloudTtsSpeaker(context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
     private val cache = TtsCache(appContext)
-    private val client = CloudTtsClient(appContext)
     private val attributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -53,6 +53,7 @@ internal class CloudTtsSpeaker(context: Context) {
 
     fun speak(
         pack: VoicePack,
+        baseUrl: String,
         text: String,
         emotion: TtsEmotion,
         speed: Float,
@@ -60,7 +61,7 @@ internal class CloudTtsSpeaker(context: Context) {
     ) {
         val sentences = TtsText.sentences(text)
         if (sentences.isEmpty()) return
-        val playback = Playback()
+        val playback = Playback(CloudTtsClient(baseUrl), VoicePackRepository.revision(appContext, pack.id))
         playback.worker = Thread(
             { run(playback, pack, sentences, emotion, speed, onFailed) },
             "bluefin-cloud-tts",
@@ -74,7 +75,6 @@ internal class CloudTtsSpeaker(context: Context) {
     }
 
     fun stop() {
-        client.cancel()
         synchronized(lock) {
             val playback = active ?: return
             active = null
@@ -87,6 +87,7 @@ internal class CloudTtsSpeaker(context: Context) {
 
     private fun cancelLocked(playback: Playback) {
         playback.worker.interrupt()
+        playback.client.cancel()
         playback.current?.let { player ->
             runCatching { player.stop() }
             runCatching { player.release() }
@@ -107,13 +108,7 @@ internal class CloudTtsSpeaker(context: Context) {
         var previous: MediaPlayer? = null
         var reported: TtsFailure? = null
         try {
-            when (val ready = CloudVoiceManager.ensureVoice(appContext, pack, client)) {
-                is CloudVoiceManager.Result.Failed -> {
-                    reported = ready.failure
-                    return
-                }
-                CloudVoiceManager.Result.Ready -> Unit
-            }
+            CloudVoiceManager.ensureVoice(appContext, pack, playback.client, playback.revision)
             for ((index, sentence) in sentences.withIndex()) {
                 if (active !== playback) return
                 val file = sentenceFile(playback, pack, sentence, emotion, speed) ?: continue
@@ -183,7 +178,9 @@ internal class CloudTtsSpeaker(context: Context) {
             focus?.let { audioManager.abandonAudioFocusRequest(it) }
             main.post { BluefinForegroundService.refresh(appContext) }
             val failure = reported
-            if (failure != null) main.post { onFailed(failure) }
+            if (failure != null && !playback.worker.isInterrupted) main.post {
+                if (CloudTtsConfig.baseUrl(appContext) == playback.client.baseUrl) onFailed(failure)
+            }
         }
     }
 
@@ -202,15 +199,15 @@ internal class CloudTtsSpeaker(context: Context) {
         emotion: TtsEmotion,
         speed: Float,
     ): File? {
-        val key = TtsCache.key(sentence, pack.id, speed, emotion.wire)
-        cache.get(key)?.let { return it }
+        val key = TtsCache.key(sentence, pack.id, speed, emotion.wire, playback.client.baseUrl, playback.revision)
+        cache.get(pack.id, key)?.let { return it }
         var attempt = 0
         while (active === playback) {
             if (Thread.currentThread().isInterrupted) throw CancellationException("stopped")
             val temp = File(appContext.cacheDir, "${TtsCache.DIR}/.part-${System.nanoTime()}")
             try {
-                CloudIdentity.withToken(appContext, client) { token ->
-                    client.synthesize(token, sentence, pack.id, speed, emotion).use { input ->
+                CloudIdentity.withToken(appContext, playback.client) { token ->
+                    playback.client.synthesize(token, sentence, pack.id, speed, emotion).use { input ->
                         temp.parentFile?.mkdirs()
                         temp.outputStream().use { output -> input.copyTo(output, 16 * 1024) }
                     }
@@ -219,7 +216,13 @@ internal class CloudTtsSpeaker(context: Context) {
                     temp.delete()
                     throw TtsFailure(TtsCategory.UNKNOWN_ERROR, "empty_audio", "语音生成结果为空。")
                 }
-                return cache.put(key, temp)
+                return synchronized(lock) {
+                    if (active === playback) cache.put(pack.id, key, temp)
+                    else {
+                        temp.delete()
+                        null
+                    }
+                }
             } catch (failure: TtsFailure) {
                 temp.delete()
                 if (!TtsProviderPolicy.isRetryable(failure.category) || attempt >= TtsProviderPolicy.MAX_RETRIES) {

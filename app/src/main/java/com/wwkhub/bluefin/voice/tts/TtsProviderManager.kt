@@ -27,9 +27,11 @@ internal class TtsProviderManager private constructor(context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val cloud = CloudTtsSpeaker(appContext)
     private val local = TtsSpeaker(appContext)
-    private val client = CloudTtsClient(appContext)
+    @Volatile private var probeClient: CloudTtsClient? = null
     private val listeners = CopyOnWriteArraySet<() -> Unit>()
     private val lock = Any()
+    private class SpeechRequest(val screenObservationOwner: Any?)
+    private var speechRequest: SpeechRequest? = null
 
     @Volatile
     private var state = loadState()
@@ -56,11 +58,24 @@ internal class TtsProviderManager private constructor(context: Context) {
     fun isSpeaking(): Boolean = cloud.isSpeaking() || local.isSpeaking()
 
     fun stop() {
+        speechRequest = null
         cloud.stop()
         local.stop()
     }
 
-    fun speak(pack: VoicePack, text: String, emotion: TtsEmotion) {
+    fun stopScreenReading(owner: Any) {
+        if (speechRequest?.screenObservationOwner === owner) stop()
+    }
+
+    fun speak(
+        pack: VoicePack,
+        text: String,
+        emotion: TtsEmotion,
+        preview: Boolean = false,
+        screenObservationOwner: Any? = null,
+    ) {
+        val request = SpeechRequest(screenObservationOwner)
+        speechRequest = request
         if (state == EngineState.LOCAL_FALLBACK) {
             if (LocalEngineVerifier.isReady(appContext)) {
                 local.speak(pack, text)
@@ -70,7 +85,7 @@ internal class TtsProviderManager private constructor(context: Context) {
             // The local engine was deleted while fallen back: return to cloud.
             setState(EngineState.CLOUD_ACTIVE)
         }
-        speakCloud(pack, text, emotion)
+        speakCloud(pack, text, emotion, preview, request)
     }
 
     /** User-initiated "try cloud again" from the offline settings. */
@@ -97,22 +112,56 @@ internal class TtsProviderManager private constructor(context: Context) {
         stop()
     }
 
-    private fun speakCloud(pack: VoicePack, text: String, emotion: TtsEmotion) {
-        if (!CloudTtsConfig.isConfigured(appContext)) {
+    fun onCloudAddressChanged() {
+        stop()
+        probeClient?.cancel()
+        persistentStreak = 0
+        lastProbeMs = 0
+    }
+
+    private fun speakCloud(
+        pack: VoicePack,
+        text: String,
+        emotion: TtsEmotion,
+        preview: Boolean,
+        request: SpeechRequest,
+    ) {
+        val base = CloudTtsConfig.baseUrl(appContext)
+        if (base.isEmpty()) {
             toast("云端语音服务地址未配置，请在朗读设置中填写。")
             return
         }
         val speed = BluefinStore.readSpeechSpeed(prefs())
-        cloud.speak(pack, text, emotion, speed) { failure ->
-            onCloudFailure(pack, text, emotion, failure)
+        val revision = VoicePackRepository.revision(appContext, pack.id)
+        cloud.speak(pack, base, text, emotion, speed) { failure ->
+            if (speechRequest !== request) return@speak
+            val allowSetupPrompts = request.screenObservationOwner == null
+            if (failure.code == CloudVoiceManager.CONSENT_REQUIRED) {
+                if (!allowSetupPrompts ||
+                    !com.wwkhub.bluefin.VoiceUploadConsentActivity.launch(appContext, base, pack.id, revision, preview)
+                ) {
+                    toast(appContext.getString(com.wwkhub.bluefin.R.string.speech_voice_upload_hint))
+                }
+            } else if (preview) {
+                if (failure.category == TtsCategory.INVALID_VOICE) CloudVoiceManager.invalidate(appContext, base, pack.id)
+                toast(failure.message)
+            } else {
+                onCloudFailure(pack, text, emotion, failure, allowSetupPrompts)
+            }
         }
     }
 
-    private fun onCloudFailure(pack: VoicePack, text: String, emotion: TtsEmotion, failure: TtsFailure) {
+    private fun onCloudFailure(
+        pack: VoicePack,
+        text: String,
+        emotion: TtsEmotion,
+        failure: TtsFailure,
+        allowSetupPrompts: Boolean,
+    ) {
         if (!TtsProviderPolicy.isRetryable(failure.category)) {
             // Persistent: a bad voice binding may succeed after re-preparation.
             if (failure.category == TtsCategory.INVALID_VOICE) {
-                CloudVoiceManager.invalidate(appContext, pack.id)
+                CloudVoiceManager.invalidate(appContext, CloudTtsConfig.baseUrl(appContext), pack.id)
             }
             persistentStreak++
         }
@@ -134,7 +183,7 @@ internal class TtsProviderManager private constructor(context: Context) {
                 toast(failure.message)
                 // A dedicated translucent activity keeps the consent visible
                 // over whichever screen is in front (main, chat or overlay).
-                if (!com.wwkhub.bluefin.FallbackSetupActivity.showing) {
+                if (allowSetupPrompts && !com.wwkhub.bluefin.FallbackSetupActivity.showing) {
                     com.wwkhub.bluefin.FallbackSetupActivity.launch(appContext)
                 }
             }
@@ -145,14 +194,17 @@ internal class TtsProviderManager private constructor(context: Context) {
     private fun maybeProbe() {
         val now = System.currentTimeMillis()
         if (!TtsProviderPolicy.shouldProbe(state, lastProbeMs, now) || probing) return
-        if (!CloudTtsConfig.isConfigured(appContext)) return
+        val base = CloudTtsConfig.baseUrl(appContext)
+        if (base.isEmpty()) return
+        val client = CloudTtsClient(base)
+        probeClient = client
         lastProbeMs = now
         probing = true
         Thread(
             {
                 try {
                     val ok = CloudIdentity.withToken(appContext, client) { client.probe(it) }
-                    if (ok && state == EngineState.LOCAL_FALLBACK) {
+                    if (ok && base == CloudTtsConfig.baseUrl(appContext) && state == EngineState.LOCAL_FALLBACK) {
                         // Switch at the next reply boundary; current playback
                         // (local) is never interrupted.
                         persistentStreak = 0
@@ -162,6 +214,7 @@ internal class TtsProviderManager private constructor(context: Context) {
                 } catch (failure: Exception) {
                     Log.d("BluefinCloudTts", "probe failed type=${failure.javaClass.simpleName}")
                 } finally {
+                    probeClient = null
                     probing = false
                 }
             },

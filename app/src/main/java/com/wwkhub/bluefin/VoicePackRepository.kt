@@ -2,6 +2,8 @@ package com.wwkhub.bluefin
 
 import android.content.Context
 import android.net.Uri
+import com.wwkhub.bluefin.voice.audio.AudioTranscoder
+import com.wwkhub.bluefin.voice.audio.VoicePackDraft
 import java.io.File
 import java.io.IOException
 import java.util.zip.ZipFile
@@ -73,7 +75,10 @@ internal object VoicePackRepository {
         val root = packRoot(context)
         if (!root.isDirectory) return emptyList()
         return root.listFiles().orEmpty()
-            .filter { it.isDirectory && PackPaths.validId(it.name) }
+            .filter {
+                it.isDirectory && PackPaths.validId(it.name) &&
+                    !com.wwkhub.bluefin.voice.tts.CloudVoiceDeletion.isPending(context, it.name)
+            }
             .sortedBy { it.name }
             .mapNotNull { readPackDir(it) }
     }
@@ -106,8 +111,9 @@ internal object VoicePackRepository {
         if (VoicePackFormat.isBuiltInId(id)) return false
         val dir = File(packRoot(context), id)
         if (!dir.isDirectory) return false
+        val wasCurrent = BluefinStore.readVoicePackId(prefs(context)) == id
         val removed = dir.deleteRecursively()
-        if (removed && currentId(context) == id) {
+        if (removed && wasCurrent) {
             BluefinStore.writeVoicePackId(prefs(context), null)
         }
         return removed
@@ -156,9 +162,64 @@ internal object VoicePackRepository {
     }
 
     /**
+     * Installs a pack the user assembled inside the app (recorded or transcoded
+     * reference clip) instead of importing a zip.
+     *
+     * The work directory is built here and then handed to [install], so the
+     * installed shape, the revision bump and the pack-count ceiling stay in one
+     * place; this method only supplies what [analyzeZip] would have extracted.
+     */
+    fun create(
+        context: Context,
+        id: String,
+        name: String,
+        about: String,
+        referenceText: String,
+        referenceWav: File,
+        sampleRate: Int = AudioTranscoder.TARGET_SAMPLE_RATE,
+    ): VoicePack {
+        if (!referenceWav.isFile || referenceWav.length() == 0L) {
+            throw VoicePackException(VoicePackReject.INVALID_REFERENCE, "missing clip")
+        }
+        val duration = WavHeader.durationSeconds(referenceWav)
+        if (duration != null && duration > VoicePackFormat.MAX_REFERENCE_SECONDS) {
+            throw VoicePackException(
+                VoicePackReject.INVALID_REFERENCE,
+                "reference is %.1f s".format(duration),
+            )
+        }
+        val work = File(
+            context.applicationContext.cacheDir,
+            "$WORK_PREFIX${System.currentTimeMillis()}",
+        )
+        work.mkdirs()
+        try {
+            File(work, VoicePackFormat.MANIFEST_FILE).writeText(
+                VoicePackDraft.manifest(
+                    id = id,
+                    name = name,
+                    about = about,
+                    referenceText = referenceText,
+                    sampleRate = sampleRate,
+                ),
+            )
+            referenceWav.copyTo(
+                File(work, VoicePackFormat.REFERENCE_FILE),
+                overwrite = true,
+            )
+            return install(context, work)
+        } catch (error: Exception) {
+            work.deleteRecursively()
+            if (error is VoicePackException) throw error
+            throw VoicePackException(VoicePackReject.BAD_JSON, error.message.orEmpty())
+        }
+    }
+
+    /**
      * Installs a previously analysed pack. [work] is the directory returned by
      * [analyzeZip]; it is copied into place and then removed.
      */
+    @Synchronized
     fun install(context: Context, work: File): VoicePack {
         val manifest = File(work, VoicePackFormat.MANIFEST_FILE)
             .takeIf { it.isFile }
@@ -166,6 +227,10 @@ internal object VoicePackRepository {
         val pack = VoicePackFormat.parse(manifest.readText(), rejectBuiltInIds = true)
         if (VoicePackFormat.isBuiltInId(pack.id)) {
             throw VoicePackException(VoicePackReject.BUILT_IN_ID, pack.id)
+        }
+        if (com.wwkhub.bluefin.voice.tts.CloudVoiceDeletion.isPending(context, pack.id)) {
+            work.deleteRecursively()
+            throw VoicePackException(VoicePackReject.DELETION_PENDING, pack.id)
         }
         val root = packRoot(context)
         root.mkdirs()

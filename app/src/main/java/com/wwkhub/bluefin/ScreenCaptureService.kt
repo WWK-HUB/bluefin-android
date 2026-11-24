@@ -27,7 +27,9 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.wwkhub.bluefin.voice.tts.TtsReader
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import kotlin.math.roundToInt
 
 class ScreenCaptureService : Service() {
@@ -55,6 +57,9 @@ class ScreenCaptureService : Service() {
     private var analysisClient: ChatCompletionsClient? = null
     private var analysisThread: Thread? = null
     private var periodicModel: ScreenModel? = null
+    private var lastAnalyzedFrame: ByteArray? = null
+    private var lastComment: ScreenObservation? = null
+    private val observationVoiceOwner = Any()
     private var frameCallback: ((Frame?) -> Unit)? = null
     private var receiverRegistered = false
     private val sampleAgain = Runnable { samplePeriodically() }
@@ -85,6 +90,7 @@ class ScreenCaptureService : Service() {
                     if (active) {
                         analysisThread?.interrupt()
                         analysisClient?.cancel()
+                        TtsReader.stopScreenReading(observationVoiceOwner)
                         ScreenAwareness.status = "已暂停 · 共享应用当前不可见。"
                     }
                 }
@@ -245,7 +251,9 @@ class ScreenCaptureService : Service() {
         }
         scheduleSample(interval * 1_000L)
         val permit = scope.permit() ?: return
-        if (canUse(permit) && !sampling && analysisThread == null && !ScreenAwareness.reviewVisible) {
+        if (canUse(permit) && !sampling && analysisThread == null && !ScreenAwareness.reviewVisible &&
+            ChatSession.peek()?.hasActiveWorker() != true
+        ) {
             ScreenAwareness.markChecked()
             ScreenAwareness.status = "正在读取共享画面…"
             takeFrame(permit, manual = false)
@@ -288,7 +296,10 @@ class ScreenCaptureService : Service() {
             manual?.callback?.invoke(currentFrame?.jpeg?.let { CapturedScreen(it) { canUse(permit) } })
             return
         }
-        request?.let { takeFrame(it.permit, manual = true) }
+        request?.let {
+            takeFrame(it.permit, manual = true)
+            return
+        }
         if (ScreenAwareness.reviewVisible || !canUse(permit)) return
         if (currentFrame == null) {
             ScreenAwareness.status = "本次未取得画面，下个周期会重试。"
@@ -298,18 +309,30 @@ class ScreenCaptureService : Service() {
     }
 
     private fun analyze(permit: Long, frame: Frame) {
-        val jpeg = frame.jpeg
+        if (lastAnalyzedFrame?.contentEquals(frame.digest) == true) {
+            ScreenAwareness.status = runningStatus()
+            return
+        }
         val model = periodicModel
         if (model == null || !model.isCurrent(this)) {
             endSession("模型设置已变化，请重新开启定时观察。")
             return
         }
+        val session = ChatSession.shared(this)
+        val generation = session.idleGeneration()
+        if (generation == null) {
+            ScreenAwareness.status = runningStatus()
+            return
+        }
         val client = ChatCompletionsClient()
-        val canSend = { model.isCurrent(this) && canUse(permit) }
+        val canSend = { canUse(permit) && !ScreenAwareness.reviewVisible && model.isCurrent(this) }
+        val previous = lastComment
         ScreenAwareness.status = "正在分析画面…"
         analysisClient = client
         analysisThread = Thread({
-            val result = runCatching { model.observe(client, jpeg, canSend) }
+            val result = runCatching {
+                model.observe(client, frame.jpeg, PersonaRepository.read(this), previous?.summary, canSend)
+            }
             val interrupted = Thread.currentThread().isInterrupted
             main.post {
                 if (analysisClient !== client) return@post
@@ -320,12 +343,36 @@ class ScreenCaptureService : Service() {
                     endSession("模型设置已变化，请重新开启定时观察。")
                     return@post
                 }
-                val summary = result.getOrNull()
-                if (!summary.isNullOrBlank()) {
-                    ScreenAwareness.recordSummary(summary, canSend)
+                if (ScreenAwareness.reviewVisible) {
+                    ScreenAwareness.status = runningStatus()
+                    return@post
+                }
+                val observation = result.getOrNull()
+                if (observation != null) {
+                    ScreenAwareness.recordSummary(observation.summary) { model.isCurrent(this) && canUse(permit) }
+                    val remark = observation.remark
+                    if (remark == null || remark == previous?.remark) {
+                        lastAnalyzedFrame = frame.digest
+                    } else if (canSend()) {
+                        session.recordScreenRemark(observation, generation)?.let { snapshot ->
+                            lastComment = observation
+                            lastAnalyzedFrame = frame.digest
+                            ScreenAwareness.onOverlayObservation?.invoke(snapshot, canSend)
+                            if (canSend()) {
+                                TtsReader.readCompletedReply(this, remark, observation.emotion, observationVoiceOwner)
+                            }
+                        }
+                    }
                     ScreenAwareness.status = runningStatus()
                 } else {
-                    ScreenAwareness.status = "未取得摘要，请检查模型是否支持图片输入。"
+                    ScreenAwareness.status = when (val error = result.exceptionOrNull()) {
+                        null -> "未取得摘要，请检查模型是否支持图片输入。"
+                        is ChatHttpStatusException -> if (error.status in setOf(400, 415, 422)) {
+                            "模型服务拒绝了截图，请检查当前模型是否支持图片输入。"
+                        } else ChatFailureText.forStatus(error.status)
+                        is ChatServiceException -> ChatFailureText.forServiceFailure()
+                        else -> ChatFailureText.forThrowable(error)
+                    }
                 }
             }
         }, "bluefin-screen-analysis").apply { isDaemon = true; start() }
@@ -388,7 +435,7 @@ class ScreenCaptureService : Service() {
         if (resized && (periodicReader || frameCallback != null && scope.permit() != null)) attachReader()
     }
 
-    private data class Frame(val jpeg: ByteArray)
+    private data class Frame(val jpeg: ByteArray, val digest: ByteArray)
 
     private fun encode(image: Image): Frame? {
         val plane = image.planes[0]
@@ -418,7 +465,8 @@ class ScreenCaptureService : Service() {
             try {
                 val output = ByteArrayOutputStream()
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)) return null
-                return Frame(output.toByteArray())
+                val jpeg = output.toByteArray()
+                return Frame(jpeg, MessageDigest.getInstance("SHA-256").digest(jpeg))
             } finally {
                 if (bitmap !== padded) bitmap.recycle()
             }
@@ -447,7 +495,7 @@ class ScreenCaptureService : Service() {
 
     private fun notification() = NotificationCompat.Builder(this, CHANNEL)
         .setSmallIcon(android.R.drawable.ic_menu_camera)
-        .setContentTitle(if (periodic) "蓝鳍正在定时观察屏幕" else "蓝鳍屏幕共享已开启")
+        .setContentTitle(if (periodic) "蓝鳍正在持续看屏" else "蓝鳍屏幕共享已开启")
         .setContentText(if (periodic) "点击可调整观察间隔" else "仅在你主动请求时取一帧")
         .setContentIntent(PendingIntent.getActivity(
             this, 135, ScreenAwarenessActivity.settingsIntent(this),
@@ -478,6 +526,7 @@ class ScreenCaptureService : Service() {
             main.removeCallbacks(expireManual)
             analysisThread?.interrupt()
             analysisClient?.cancel()
+            TtsReader.stopScreenReading(observationVoiceOwner)
             analysisClient = null
             analysisThread = null
             periodicModel = null

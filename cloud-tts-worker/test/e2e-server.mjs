@@ -88,6 +88,7 @@ const mf = new Miniflare({
   modules: true,
   scriptPath: path.join(ROOT, "dist-test/index.mjs"),
   compatibilityDate: "2025-09-01",
+  compatibilityFlags: ["enable_request_signal"],
   port: 8787,
   hostname: "127.0.0.1",
   durableObjects: { GATE: { className: "Gate", useSQLite: true } },
